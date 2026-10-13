@@ -3,6 +3,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 pub mod anchorage_render;
+pub mod canonical_json;
 pub mod encodings;
 pub mod errors;
 pub mod field_builders;
@@ -1897,7 +1898,7 @@ mod tests {
         // Test that the original SignablePayloadField enum passes all verification
         // This confirms our refactoring maintains correctness and adds verification
 
-        let test_fields = vec![
+        let test_fields = [
             // TextV2
             SignablePayloadField::TextV2 {
                 common: SignablePayloadFieldCommon {
