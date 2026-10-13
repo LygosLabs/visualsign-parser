@@ -46,9 +46,19 @@
   `idl_mappings` being accepted for programs that are not trusted built-ins or presets, are documented trust
   postures, not bugs. A present-but-invalid signature must still be rejected, and a caller IDL must never take
   effect for a program that `is_trusted_program` covers.
-- `tools/tvc-deploy` not yet emitting the trust-posture flags is a known, tracked follow-up.
+- The ABI trust posture is a deploy-time choice that `tools/tvc-deploy` writes into the deployment manifest's
+  `pivotArgs`, where a signer can see it. Which posture a deployment runs is not a finding.
 - Workspace lints forbid `unwrap`, `expect`, `panic!` and `unsafe`; report violations reachable from untrusted input.
 
+## How trust in a deployment is established
+- A signer approves one specific sha256 of the release `parser_app` binary after reviewing it. A finding matters
+  when it affects the bytes that hash covers. That binary is built from `src/parser/app` with the exact recipe in
+  `images/parser_app/Containerfile` (pinned stagex image, static musl, `--release`), and a copy is kept in the
+  scan image at `/opt/release/parser_app`. The debug build under `/src/src/target/debug` is for exercising code
+  and reproducing findings; its hash is not the approved one.
+
 ## How you would like reports to look
-- State the full git commit SHA of the checkout that was built and audited, so we can rebuild that exact source
-  with our own pinned toolchain and reproduce the finding.
+- State the full git commit SHA of the checkout that was built and audited.
+- Say whether the finding is in code compiled into the release `parser_app` (and which chain features), and give
+  the sha256 of `/opt/release/parser_app` as built in your image. We re-derive hashes ourselves; do not rely on it
+  as proof.
