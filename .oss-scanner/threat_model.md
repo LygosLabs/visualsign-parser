@@ -48,3 +48,7 @@
   effect for a program that `is_trusted_program` covers.
 - `tools/tvc-deploy` not yet emitting the trust-posture flags is a known, tracked follow-up.
 - Workspace lints forbid `unwrap`, `expect`, `panic!` and `unsafe`; report violations reachable from untrusted input.
+
+## How you would like reports to look
+- State the full git commit SHA of the checkout that was built and audited, so we can rebuild that exact source
+  with our own pinned toolchain and reproduce the finding.
