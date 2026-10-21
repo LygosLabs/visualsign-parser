@@ -23,11 +23,17 @@
 //!   (which is enabled transitively elsewhere in the workspace and would
 //!   otherwise serialize nested objects in insertion order).
 
+// The inner-instruction helpers are only reached from simulation decoding.
+#![cfg_attr(not(feature = "simulation"), allow(dead_code))]
+
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde_json::Value;
+use solana_message::compiled_instruction::CompiledInstruction;
+use solana_message::v0::LoadedAddresses;
+use solana_message::{AccountKeys, VersionedMessage};
 use solana_parser::solana::idl_parser::{
     compute_idl_hash, construct_idl_records_map, create_accounts_map,
     find_instruction_by_discriminator, parse_data_into_args, resolve_idl_for_record,
@@ -37,11 +43,8 @@ use solana_parser::solana::structs::{
     IdlTypeDefinitionType, SolanaMetadata, SolanaParsedInstructionData,
 };
 use solana_parser::{CustomIdlConfig, parse_transaction_with_idl_records};
-use solana_sdk::instruction::CompiledInstruction;
-use solana_sdk::message::v0::LoadedAddresses;
-use solana_sdk::message::{AccountKeys, VersionedMessage};
-use solana_sdk::pubkey::Pubkey;
-use solana_sdk::transaction::VersionedTransaction;
+use solana_pubkey::Pubkey;
+use solana_transaction::versioned::VersionedTransaction;
 use visualsign::canonical_json;
 use visualsign::errors::VisualSignError;
 use visualsign::vsptrait::TransactionParseError;
@@ -109,6 +112,8 @@ pub enum SolanaSimulationError {
     /// An inner instruction's data was not valid base58, which the RPC never
     /// emits.
     InvalidInstructionData = 6,
+    /// The parser was built without the `simulation` feature.
+    SimulationUnsupported = 7,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
@@ -578,7 +583,7 @@ impl<'a> CompiledMessage<'a> {
         let placeholders = |set: u8| {
             let placeholder = move |slot: usize| {
                 Pubkey::new_from_array(
-                    solana_sdk::hash::hashv(&[
+                    solana_sha256_hasher::hashv(&[
                         b"visualsign:address-table-lookup",
                         &[set],
                         &slot.to_le_bytes(),
@@ -662,6 +667,7 @@ fn decode_native_inner(
 /// On any problem the list comes back empty with a [`SolanaSimulationError`]
 /// saying why, so "we could not read this" stays distinguishable from "there was
 /// nothing to find". A simulation with no `innerInstructions` is the latter.
+#[cfg(feature = "simulation")]
 pub(crate) fn parse_and_decode_simulated_instructions(
     raw_json: &[u8],
     idl_registry: &IdlRegistry,
@@ -696,9 +702,26 @@ pub(crate) fn parse_and_decode_simulated_instructions(
     decode_inner_instructions(inner_instructions, idl_registry)
 }
 
+/// Without the `simulation` feature a supplied simulation cannot be read.
+#[cfg(not(feature = "simulation"))]
+pub(crate) fn parse_and_decode_simulated_instructions(
+    _raw_json: &[u8],
+    _idl_registry: &IdlRegistry,
+) -> (
+    Vec<SolanaSimulatedInstruction>,
+    Option<SolanaSimulationError>,
+) {
+    tracing::warn!("simulated_transaction_result supplied but the `simulation` feature is off");
+    (
+        Vec::new(),
+        Some(SolanaSimulationError::SimulationUnsupported),
+    )
+}
+
 /// Builds one [`SolanaSimulatedInstruction`] per inner instruction across every
 /// outer instruction's `UiInnerInstructions` entry, from the raw `simulateTransaction`
 /// RPC shape
+#[cfg(feature = "simulation")]
 fn decode_inner_instructions(
     inner_instructions: Vec<solana_transaction_status::UiInnerInstructions>,
     idl_registry: &IdlRegistry,
@@ -960,7 +983,7 @@ impl IdlEvent {
             return self.discriminator.clone();
         }
         let seed = format!("event:{}", self.name);
-        let hash = solana_sdk::hash::hash(seed.as_bytes()).to_bytes();
+        let hash = solana_sha256_hasher::hash(seed.as_bytes()).to_bytes();
         hash[..8].to_vec()
     }
 }
@@ -1273,7 +1296,8 @@ fn versioned_message(raw_hex: &str, full_transaction: bool) -> Option<VersionedM
     }
 }
 
-#[cfg(test)]
+// These assert the jsonParsed and simulation decodes.
+#[cfg(all(test, feature = "simulation"))]
 // `disallowed_types`: the upstream `SolanaParsedInstructionData.named_accounts`
 // is a `HashMap`, so tests that build a fixture value must construct one.
 #[allow(
@@ -1287,8 +1311,8 @@ mod tests {
     use super::*;
     use base64::Engine;
     use serde_json::json;
+    use solana_message::{MessageHeader, v0};
     use solana_parser::solana::structs::{IdlRecord, ProgramType};
-    use solana_sdk::message::{MessageHeader, v0};
     use std::collections::HashMap;
 
     fn args_map(values: &[(&str, Value)]) -> serde_json::Map<String, Value> {
@@ -1449,6 +1473,7 @@ mod tests {
             (SolanaSimulationError::CallerIdlRecordsUnusable, 4),
             (SolanaSimulationError::CompiledInstruction, 5),
             (SolanaSimulationError::InvalidInstructionData, 6),
+            (SolanaSimulationError::SimulationUnsupported, 7),
         ] {
             let io = SolanaIntermediateOutput {
                 schema_version: SOLANA_INTERMEDIATE_SCHEMA_VERSION,
@@ -1868,7 +1893,7 @@ mod tests {
             mint_authority,
         ] = std::array::from_fn(|_| Pubkey::new_unique().to_string());
         let liquidity = Pubkey::new_unique().to_string();
-        let token = spl_token::id().to_string();
+        let token = spl_token_interface::id().to_string();
         let raw_json = serde_json::to_vec(&serde_json::json!({
             "context": { "slot": 1 },
             "value": {
@@ -1989,7 +2014,7 @@ mod tests {
         data.extend_from_slice(&1_500_000u64.to_le_bytes());
         data.push(6);
         let instruction = static_instruction(
-            &spl_token::id().to_string(),
+            &spl_token_interface::id().to_string(),
             &[&source, &mint, &destination, &authority],
             &data,
         );
@@ -2098,8 +2123,12 @@ mod tests {
     /// Asks the real decoder about every `Native` program: the ones it supports
     /// must be exactly `SOLANA_JSON_PARSED_PROGRAMS`. `parse` looks the program
     /// up before reading the instruction, so an empty probe answers that alone.
+    #[cfg(feature = "json-parsed")]
     #[test]
     fn solana_json_parsed_programs_match_the_decoder() {
+        // solana-transaction-status 2.x takes the solana-sdk 2.x types.
+        use solana_message_v2::{AccountKeys, compiled_instruction::CompiledInstruction};
+        use solana_pubkey_v2::Pubkey;
         use solana_transaction_status::parse_instruction::{ParseInstructionError, parse};
 
         let supported_by_decoder: Vec<&str> = crate::idl::builtin_programs::NATIVE_PROGRAM_NAMES
@@ -2220,7 +2249,7 @@ mod tests {
                 payer,
                 Pubkey::from_str("11111111111111111111111111111111").unwrap(),
             ],
-            recent_blockhash: solana_sdk::hash::Hash::default(),
+            recent_blockhash: solana_hash::Hash::default(),
             address_table_lookups: vec![v0::MessageAddressTableLookup {
                 account_key: table,
                 writable_indexes: vec![7],
@@ -2232,7 +2261,7 @@ mod tests {
                 data: transfer,
             }],
         });
-        let message_hex = hex::encode(message.serialize());
+        let message_hex = hex::encode(bincode::serialize(&message).unwrap());
 
         let output = extract_solana_intermediate_output(&message_hex, false, &IdlRegistry::new())
             .expect("solana_parser accepts the message");
@@ -2281,7 +2310,7 @@ mod tests {
             .decode(fixture["transaction_base64"].as_str().unwrap())
             .unwrap();
         let transaction: VersionedTransaction = bincode::deserialize(&bytes).unwrap();
-        let message_hex = hex::encode(transaction.message.serialize());
+        let message_hex = hex::encode(bincode::serialize(&transaction.message).unwrap());
 
         let output = extract_solana_intermediate_output(&message_hex, false, &IdlRegistry::new())
             .expect("solana_parser accepts the message");
@@ -2361,7 +2390,7 @@ mod tests {
     #[test]
     fn native_instruction_decodes_identically_outer_and_inner() {
         let [source, mint, destination, authority] = std::array::from_fn(|_| Pubkey::new_unique());
-        let token = spl_token::id();
+        let token = spl_token_interface::id();
         let mut data = vec![12];
         data.extend_from_slice(&1_500_000u64.to_le_bytes());
         data.push(6);
