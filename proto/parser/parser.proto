@@ -168,6 +168,9 @@ message SolanaMetadata {
   // static-decode path (parse_transaction_with_idls) used for
   // unsigned_payload.
   optional string simulated_transaction_result = 5;
+  // Fee ceiling the wallet endorsed, in lamports (base plus priority fee). Rendered
+  // as the top-level "Max Fee" row; omitted when the wallet endorses no ceiling.
+  optional uint64 max_fee_lamports = 6;
 }
 
 message NearMetadata {

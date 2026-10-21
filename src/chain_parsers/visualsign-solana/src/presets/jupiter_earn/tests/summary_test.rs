@@ -49,6 +49,32 @@ fn payload_for(instructions: &[Instruction], payer: &Pubkey) -> SignablePayload 
     payload_from_b64(&legacy_transaction_b64(instructions, payer))
 }
 
+fn payload_with_endorsed_max_fee(
+    instructions: &[Instruction],
+    payer: &Pubkey,
+    max_fee_lamports: u64,
+) -> SignablePayload {
+    use generated::parser::{ChainMetadata, SolanaMetadata, chain_metadata::Metadata};
+    let options = VisualSignOptions {
+        metadata: Some(ChainMetadata {
+            metadata: Some(Metadata::Solana(SolanaMetadata {
+                network_id: None,
+                idl: None,
+                idl_mappings: Default::default(),
+                simulated_transaction_result: None,
+                max_fee_lamports: Some(max_fee_lamports),
+            })),
+        }),
+        decode_transfers: true,
+        ..VisualSignOptions::default()
+    };
+    crate::core::transaction_string_to_visual_sign(
+        &legacy_transaction_b64(instructions, payer),
+        options,
+    )
+    .expect("visualize")
+}
+
 fn top_level_value(payload: &SignablePayload, label: &str) -> Option<String> {
     payload
         .fields
@@ -227,6 +253,40 @@ fn test_infrastructure_legs_keep_the_summary() {
         .find(|f| f.label() == "Priority fee")
         .expect("Priority fee row");
     assert_eq!(fee.fallback_text(), "0.000015 SOL");
+}
+
+/// The endorsed ceiling sits right after the hoisted rows, beside the priority fee.
+#[test]
+fn test_endorsed_max_fee_follows_the_hoisted_priority_fee() {
+    let deposit = instruction_from_fixture(&load_fixture("deposit_usdc"));
+    let payer = deposit.accounts[0].pubkey;
+    let compute_limit =
+        solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(300_000);
+    let compute_price =
+        solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_price(50_000);
+
+    let payload =
+        payload_with_endorsed_max_fee(&[compute_limit, compute_price, deposit], &payer, 5_105_000);
+
+    assert_eq!(payload.title, "Supply USDC to Jupiter Lend");
+    let labels = top_level_labels(&payload);
+    assert!(
+        labels.starts_with(&[
+            "Network",
+            "From",
+            "Program",
+            "Amount",
+            "Recipient",
+            "Instruction",
+            "Receive",
+            "Priority fee",
+            "Max Fee",
+            "Instruction 1",
+        ]),
+        "unexpected top-level layout: {labels:?}"
+    );
+    assert_eq!(top_level_value(&payload, "Max Fee").unwrap(), "0.005105");
+    payload.validate_charset().unwrap();
 }
 
 /// No unit limit: the fee row is an upper bound at the runtime maximum and says so.

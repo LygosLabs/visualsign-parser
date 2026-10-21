@@ -72,6 +72,8 @@ message SolanaMetadata {
   optional string network_id = 2;       // Network identifier (e.g., "SOLANA_MAINNET", "SOLANA_DEVNET")
   optional Idl idl = 1;                 // Anchor IDL for decoding (single program)
   map<string, Idl> idl_mappings = 3;    // Map of program_id to IDL (multiple programs)
+  optional string simulated_transaction_result = 5; // Base64 simulateTransaction result, for inner (CPI) instructions
+  optional uint64 max_fee_lamports = 6; // Fee ceiling the wallet endorsed, rendered as the "Max Fee" row
 }
 ```
 
@@ -181,6 +183,22 @@ grpcurl -plaintext -d '{
         "idl_type": "SOLANA_IDL_TYPE_ANCHOR",
         "idl_version": "0.30.0"
       }
+    }
+  }
+}' localhost:44020 parser.ParserService/Parse
+```
+
+### Solana with an endorsed max fee
+
+```bash
+# Solana with the fee ceiling the wallet endorsed, in lamports. The parser
+# renders it as a top-level "Max Fee" row right after the header rows.
+grpcurl -plaintext -d '{
+  "unsigned_payload": "AgAAAAAAAA...",
+  "chain": "CHAIN_SOLANA",
+  "chain_metadata": {
+    "solana": {
+      "max_fee_lamports": 5105000
     }
   }
 }' localhost:44020 parser.ParserService/Parse

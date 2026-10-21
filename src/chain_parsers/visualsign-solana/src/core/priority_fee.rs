@@ -78,6 +78,16 @@ impl PriorityFeeEstimate {
     }
 }
 
+/// Top-level "Max Fee" row: the fee ceiling the wallet endorsed, which the signer
+/// enforces against the sign-time compute budget.
+pub fn endorsed_max_fee_field(lamports: u64) -> Result<AnnotatedPayloadField, VisualSignError> {
+    create_amount_field(
+        "Max Fee",
+        &format_token_amount(lamports, SOL_DECIMALS),
+        "SOL",
+    )
+}
+
 /// Rounded up, saturating at `u64::MAX` as the runtime does.
 fn lamports(unit_price: u64, unit_limit: u32) -> u64 {
     let micro_lamports = u128::from(unit_price) * u128::from(unit_limit);
@@ -160,6 +170,22 @@ mod tests {
             ComputeBudgetInstruction::SetComputeUnitLimit(2),
         ]);
         assert!(twice_limited.is_invalid());
+    }
+
+    #[test]
+    fn test_endorsed_max_fee_field_renders_lamports_as_sol() {
+        let field = endorsed_max_fee_field(5_105_000).unwrap();
+        let SignablePayloadField::AmountV2 { amount_v2, common } = field.signable_payload_field
+        else {
+            panic!("expected amount_v2");
+        };
+        assert_eq!(common.label, "Max Fee");
+        assert_eq!(common.fallback_text, "0.005105 SOL");
+        assert_eq!(amount_v2.amount, "0.005105");
+        assert_eq!(amount_v2.abbreviation.as_deref(), Some("SOL"));
+
+        let zero = endorsed_max_fee_field(0).unwrap();
+        assert_eq!(zero.signable_payload_field.fallback_text(), "0 SOL");
     }
 
     #[test]

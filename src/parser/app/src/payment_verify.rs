@@ -760,12 +760,14 @@ mod tests {
             idl.clone(),
         );
 
+        let max_fee_lamports = 5_105_000u64;
         let metadata = ChainMetadata {
             metadata: Some(chain_metadata::Metadata::Solana(SolanaMetadata {
                 network_id: Some(network_id.to_string()),
                 idl: Some(idl.clone()),
                 idl_mappings,
                 simulated_transaction_result: None,
+                max_fee_lamports: Some(max_fee_lamports),
             })),
         };
 
@@ -783,6 +785,8 @@ mod tests {
         expected.extend_from_slice(key.as_bytes());
         encode_idl(&idl, &mut expected);
         expected.push(0); // SolanaMetadata.simulated_transaction_result: Option<String>: None
+        expected.push(1); // SolanaMetadata.max_fee_lamports: Option<u64>: Some
+        expected.extend_from_slice(&max_fee_lamports.to_le_bytes());
 
         assert_eq!(chain_metadata_bytes(Some(&metadata)).unwrap(), expected);
     }
