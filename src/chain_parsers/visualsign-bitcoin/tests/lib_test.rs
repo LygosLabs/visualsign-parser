@@ -17,8 +17,11 @@
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpriv};
 use bitcoin::hashes::Hash;
 use bitcoin::key::TapTweak;
+use bitcoin::opcodes::all::{OP_CHECKSIG, OP_CHECKSIGADD, OP_NUMEQUAL};
 use bitcoin::psbt::{Psbt, PsbtSighashType};
+use bitcoin::script::Builder;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, XOnlyPublicKey};
+use bitcoin::taproot::{LeafVersion, TapLeafHash, TapTree, TaprootBuilder};
 use bitcoin::{
     Address, Amount, EcdsaSighashType, Network, NetworkKind, OutPoint, ScriptBuf, Sequence,
     Transaction, TxIn, TxOut, Txid, Witness, absolute, transaction,
@@ -234,6 +237,72 @@ fn p2tr_single_sig() -> Psbt {
     p
 }
 
+const NUMS_HEX: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
+
+fn multi_a_script(k: i64, keys: &[XOnlyPublicKey]) -> ScriptBuf {
+    let mut b = Builder::new();
+    for (i, x) in keys.iter().enumerate() {
+        b = b.push_x_only_key(x);
+        b = b.push_opcode(if i == 0 { OP_CHECKSIG } else { OP_CHECKSIGADD });
+    }
+    b.push_int(k).push_opcode(OP_NUMEQUAL).into_script()
+}
+
+/// 2-of-3 `tr(internal, multi_a(2, ...))` spend with change back to the same
+/// policy. Cosigner keys come from three BIP-86-style paths under the test seed.
+fn tr_multi_a_with(internal: XOnlyPublicKey, leaf: Option<ScriptBuf>) -> Psbt {
+    let k = keys();
+    let secp = Secp256k1::new();
+    let paths = ["m/86'/0'/0'/0/0", "m/86'/0'/1'/0/0", "m/86'/0'/2'/0/0"];
+    let xs: Vec<XOnlyPublicKey> = paths.iter().map(|p| xonly(p)).collect();
+    let script = leaf.unwrap_or_else(|| multi_a_script(2, &xs));
+    let info = TaprootBuilder::new()
+        .add_leaf(0, script.clone())
+        .unwrap()
+        .finalize(&secp, internal)
+        .unwrap();
+    let spk = ScriptBuf::new_p2tr_tweaked(info.output_key());
+    let prev = prev_tx(spk.clone(), 100_000, 4);
+    let mut p = spend(
+        &prev,
+        vec![txout(p2tr("m/86'/0'/5'/0/0"), 70_000), txout(spk, 29_000)],
+    );
+    p.inputs[0].witness_utxo = Some(prev.output[0].clone());
+    p.inputs[0].tap_internal_key = Some(internal);
+    let cb = info
+        .control_block(&(script.clone(), LeafVersion::TapScript))
+        .unwrap();
+    p.inputs[0]
+        .tap_scripts
+        .insert(cb, (script.clone(), LeafVersion::TapScript));
+    let leaf_hash = TapLeafHash::from_script(&script, LeafVersion::TapScript);
+    for (x, path_str) in xs.iter().zip(paths) {
+        p.inputs[0]
+            .tap_key_origins
+            .insert(*x, (vec![leaf_hash], (k.fingerprint, path(path_str))));
+        p.outputs[1]
+            .tap_key_origins
+            .insert(*x, (vec![leaf_hash], (k.fingerprint, path(path_str))));
+    }
+    p.outputs[1].tap_internal_key = Some(internal);
+    p.outputs[1].tap_tree =
+        Some(TapTree::try_from(TaprootBuilder::new().add_leaf(0, script).unwrap()).unwrap());
+    p
+}
+
+fn nums() -> XOnlyPublicKey {
+    XOnlyPublicKey::from_str(NUMS_HEX).unwrap()
+}
+
+fn tr_multi_a_nums() -> Psbt {
+    tr_multi_a_with(nums(), None)
+}
+
+/// Same policy, but the internal key is a real key: it can spend alone.
+fn tr_multi_a_internal_key_spend() -> Psbt {
+    tr_multi_a_with(xonly("m/86'/0'/9'/0/0"), None)
+}
+
 fn hex_of(p: &Psbt) -> String {
     hex::encode(p.serialize())
 }
@@ -248,7 +317,12 @@ fn json_of(p: &Psbt) -> String {
 
 type SyntheticBuilder = (&'static str, fn() -> Psbt);
 
-const SYNTHETIC: [SyntheticBuilder; 5] = [
+const SYNTHETIC: [SyntheticBuilder; 7] = [
+    ("synthetic-tr-multi-a-2of3", tr_multi_a_nums),
+    (
+        "synthetic-tr-multi-a-internal-key-spend",
+        tr_multi_a_internal_key_spend,
+    ),
     ("synthetic-p2wpkh-single-sig", p2wpkh_single_sig),
     ("synthetic-p2wpkh-no-prev-tx", p2wpkh_without_prev_tx),
     (
@@ -263,7 +337,9 @@ const SYNTHETIC: [SyntheticBuilder; 5] = [
 ];
 
 /// PSBTs that must decode, with their golden output.
-static VALID_FIXTURES: [&str; 11] = [
+static VALID_FIXTURES: [&str; 13] = [
+    "synthetic-tr-multi-a-2of3",
+    "synthetic-tr-multi-a-internal-key-spend",
     "bip174-p2pkh",
     "bip174-p2pkh-and-p2sh-p2wpkh-signed",
     "bip174-p2sh-p2wsh-multisig",
@@ -562,4 +638,76 @@ fn parse_network_accepts_known_names() {
         Ok(Network::Signet)
     );
     assert!(visualsign_bitcoin::parse_network("litecoin").is_err());
+}
+
+#[test]
+fn bip174_wsh_multisig_shows_threshold_and_origins() {
+    let json = convert_json(&read_input("bip174-p2wsh-multisig"));
+    assert!(json.contains("2 of 2 (P2WSH)"), "{json}");
+    assert!(json.contains(r#""Label":"Cosigner 1""#));
+    assert!(json.contains(r#""Label":"Cosigner 2""#));
+    // The vector carries bip32_derivation for both keys.
+    assert!(!json.contains("no origin"), "{json}");
+    assert!(!json.contains("unrecognized script"));
+}
+
+#[test]
+fn tr_multi_a_with_nums_internal_key_has_no_warning() {
+    let json = json_of(&tr_multi_a_nums());
+    assert!(json.contains("2 of 3 (P2TR script path)"), "{json}");
+    assert!(json.contains(NUMS_HEX));
+    assert!(!json.contains("internal key can spend alone"));
+    assert!(json.contains("verified") || json.contains(r#""Label":"Fee""#));
+    // The change output shows the same policy through its tap tree.
+    assert_eq!(json.matches("2 of 3 (P2TR script path)").count(), 2 * 2);
+}
+
+#[test]
+fn tr_multi_a_with_real_internal_key_warns() {
+    let json = json_of(&tr_multi_a_internal_key_spend());
+    assert!(json.contains("internal key can spend alone"), "{json}");
+}
+
+#[test]
+fn single_key_tap_leaf_is_unrecognized() {
+    let key = xonly("m/86'/0'/0'/0/0");
+    let leaf = Builder::new()
+        .push_x_only_key(&key)
+        .push_opcode(OP_CHECKSIG)
+        .into_script();
+    let json = json_of(&tr_multi_a_with(nums(), Some(leaf.clone())));
+    assert!(json.contains("unrecognized script"), "{json}");
+    assert!(json.contains(&leaf.to_hex_string()));
+    assert!(!json.contains("P2TR script path"));
+}
+
+#[test]
+fn witness_script_not_matching_the_output_is_unrecognized() {
+    let mut p = p2wpkh_single_sig();
+    let ws = ScriptBuf::from_hex("5121").unwrap();
+    p.inputs[0].witness_script = Some(ws);
+    let json = json_of(&p);
+    assert!(
+        json.contains("witness script does not match the output"),
+        "{json}"
+    );
+    assert!(json.contains(r#""Script","#) || json.contains(r#""Label":"Script""#));
+}
+
+#[test]
+fn tap_script_not_committed_by_the_output_is_unrecognized() {
+    // Swap the prevout for a different taproot output: the control block no
+    // longer commits to it.
+    let mut p = tr_multi_a_nums();
+    let other = prev_tx(p2tr("m/86'/0'/0'/0/0"), 100_000, 5);
+    p.inputs[0].witness_utxo = Some(other.output[0].clone());
+    let json = json_of(&p);
+    assert!(json.contains("not committed to by the output"), "{json}");
+    assert!(!json.contains("2 of 3 (P2TR script path)") || json.matches("2 of 3").count() == 2);
+}
+
+#[test]
+fn bip174_p2sh_p2wsh_multisig_is_recognized() {
+    let json = convert_json(&read_input("bip174-p2sh-p2wsh-multisig"));
+    assert!(json.contains("2 of 2 (P2SH-P2WSH)"), "{json}");
 }

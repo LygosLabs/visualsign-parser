@@ -11,6 +11,7 @@
 //! spends a taproot output (a BIP-341 signature commits to all input amounts,
 //! so whichever input gets signed binds the rest).
 
+use crate::scripts::{self, ScriptDetail};
 use bitcoin::psbt::{Input, Output, Psbt};
 use bitcoin::{Address, Amount, Network, OutPoint, Script, ScriptBuf, TxIn, TxOut};
 
@@ -43,6 +44,8 @@ pub struct InputInfo {
     pub script_type: Option<&'static str>,
     /// Set when the PSBT asks for a sighash type other than ALL / DEFAULT.
     pub sighash_warning: Option<String>,
+    /// Multisig / script details from the witness script or tap leaf scripts.
+    pub scripts: Vec<ScriptDetail>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -54,6 +57,7 @@ pub struct OutputInfo {
     /// The PSBT carries derivation data for this output, i.e. it claims the
     /// output returns to the signer's wallet. The parser cannot check that.
     pub claims_change: bool,
+    pub scripts: Vec<ScriptDetail>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -95,6 +99,7 @@ pub fn analyze(psbt: &Psbt, network: Network) -> Result<Analysis, BitcoinParserE
             address: prevout.and_then(|o| address(&o.script_pubkey, network)),
             script_type: prevout.map(|o| script_type(&o.script_pubkey)),
             sighash_warning: sighash_warning(input, is_taproot),
+            scripts: scripts::input_scripts(input, prevout.map(|o| o.script_pubkey.as_script())),
         });
     }
 
@@ -110,6 +115,7 @@ pub fn analyze(psbt: &Psbt, network: Network) -> Result<Analysis, BitcoinParserE
             script_hex: out.script_pubkey.to_hex_string(),
             script_type: script_type(&out.script_pubkey),
             claims_change: claims_change(meta),
+            scripts: scripts::output_scripts(meta, &out.script_pubkey),
         });
     }
 

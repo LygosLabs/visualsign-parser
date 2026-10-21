@@ -9,6 +9,7 @@
 mod analysis;
 #[cfg(feature = "cli-plugin")]
 pub mod cli_plugin;
+mod scripts;
 
 #[cfg(feature = "cli-plugin")]
 pub use cli_plugin::{BitcoinArgs, BitcoinPlugin};
@@ -227,6 +228,7 @@ fn input_field(index: usize, input: &InputInfo) -> Result<AnnotatedPayloadField,
             AmountSource::Missing => "missing",
         },
     )?);
+    expanded.extend(script_fields(&input.scripts)?);
     if let Some(warning) = &input.sighash_warning {
         expanded.push(create_text_field("Sighash Type", warning)?);
     }
@@ -254,6 +256,7 @@ fn output_field(
     }
     expanded.push(create_text_field("Script Type", output.script_type)?);
     expanded.push(create_amount_field("Amount", &btc(output.amount), "BTC")?);
+    expanded.extend(script_fields(&output.scripts)?);
     if output.claims_change {
         expanded.push(create_text_field("Change", CLAIMS_CHANGE)?);
     }
@@ -270,4 +273,41 @@ fn output_field(
         subtitle,
         expanded,
     ))
+}
+
+fn script_fields(
+    details: &[scripts::ScriptDetail],
+) -> Result<Vec<AnnotatedPayloadField>, VisualSignError> {
+    let mut fields = Vec::new();
+    for detail in details {
+        match detail {
+            scripts::ScriptDetail::Multisig(m) => {
+                fields.push(create_text_field(
+                    "Multisig",
+                    &format!("{} of {} ({})", m.threshold, m.cosigners.len(), m.kind),
+                )?);
+                for (i, c) in m.cosigners.iter().enumerate() {
+                    let origin = c.origin.as_deref().unwrap_or("no origin");
+                    fields.push(create_text_field(
+                        &format!("Cosigner {}", i + 1),
+                        &format!("{} ({origin})", c.key_hex),
+                    )?);
+                }
+                if let Some((key, nums)) = &m.internal_key {
+                    fields.push(create_text_field("Internal Key", key)?);
+                    if !nums {
+                        fields.push(create_text_field(
+                            "Internal Key Warning",
+                            "internal key can spend alone",
+                        )?);
+                    }
+                }
+            }
+            scripts::ScriptDetail::Unrecognized { script_hex, reason } => {
+                fields.push(create_text_field("Script", script_hex)?);
+                fields.push(create_text_field("Script Status", reason)?);
+            }
+        }
+    }
+    Ok(fields)
 }

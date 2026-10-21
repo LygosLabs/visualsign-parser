@@ -18,6 +18,7 @@ The Bitcoin parser produces:
 - `Network`
 - One expandable `Input N` per input: outpoint, address, script type, amount, and where the amount came from.
 - One expandable `Output N` per output: address (or the raw script for `OP_RETURN` and other non-address scripts), script type and amount.
+- Multisig details inside an input or output when the PSBT carries a recognized script: `Multisig` (threshold, script kind), `Cosigner N` (key and origin), and for taproot the `Internal Key`.
 - `Fee`, and `Lock Time` when non-zero.
 
 ## What the parser can and cannot vouch for
@@ -34,6 +35,8 @@ The parser holds no keys. It checks what a PSBT can prove on its own and flags t
 | Any other input amount known only from `witness_utxo` | `Fee` shown with `(unverified: ...)`. A segwit v0 signature commits only to its own input amount, so a wrong `witness_utxo` can hide a large fee. |
 | An input has no UTXO data | `Fee` shown as `unknown` |
 | An output carries `bip32_derivation` or `tap_key_origins` | Labeled `claims change (unverified by parser)`. The parser cannot check that the keys belong to the signer. |
+| An input or output carries a `witness_script` (wsh, optionally P2SH-wrapped) or tap leaf scripts | If the script is bound to the output (script hash, or taproot commitment through the control block or tap tree) and matches `multi`/`sortedmulti` or `multi_a`, the threshold, cosigner keys and key origins are shown. Anything else is shown raw as `unrecognized script`. |
+| Taproot multisig whose internal key is not the BIP-341 NUMS point | `Internal Key Warning: internal key can spend alone` |
 | Input requests a sighash type other than ALL/DEFAULT | A `Sighash Type` field is shown |
 
 Change verification (deriving the claimed change key from an account xpub) needs key material the parser does not have, and belongs in the signer.
