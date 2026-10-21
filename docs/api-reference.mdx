@@ -193,9 +193,10 @@ grpcurl -plaintext -d '{
 ```bash
 # Solana with the maximum total fee the caller allows, in lamports. The parser
 # renders it as a top-level "Max Fee" row right after the header rows and
-# rejects the request when the transaction commits to more (5000 lamports per
-# signature plus the compute budget's priority fee). Over the HTTP gateway the
-# same field is the camelCase key `maxFeeLamports`.
+# rejects the request when the transaction commits to more: 5000 lamports per
+# signature, counting the ones precompile instructions verify, plus the compute
+# budget's priority fee. Over the HTTP gateway the same field is the camelCase
+# key `maxFeeLamports`.
 grpcurl -plaintext -d '{
   "unsigned_payload": "AgAAAAAAAA...",
   "chain": "CHAIN_SOLANA",

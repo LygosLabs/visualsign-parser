@@ -19,7 +19,8 @@ mod visualsign;
 pub use accounts::*;
 pub use arg_rendering::format_arg_value;
 pub use instructions::*;
-pub use priority_fee::BASE_FEE_LAMPORTS_PER_SIGNATURE;
+#[cfg(test)]
+pub(crate) use priority_fee::BASE_FEE_LAMPORTS_PER_SIGNATURE;
 pub use txtypes::*;
 pub use visualsign::*;
 

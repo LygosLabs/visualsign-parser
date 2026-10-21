@@ -7,10 +7,10 @@ tags: ["Wallet API"]
 `SolanaMetadata` gains an optional `max_fee_lamports` field (`maxFeeLamports`
 on the HTTP gateway). When set, the payload shows it as a top-level "Max Fee"
 row in SOL right after the header rows. The parser rejects the request when
-the fee the transaction commits to (5000 lamports per signature plus the
-compute budget's priority fee) exceeds the cap, so the row is a true upper
-bound on what the transaction pays. The CLI accepts the same value as
-`--max-fee-lamports`.
+the fee the transaction commits to exceeds the cap: 5000 lamports per
+signature, counting the ones precompile instructions verify, plus the compute
+budget's priority fee. The row is therefore a true upper bound on what the
+transaction pays. The CLI accepts the same value as `--max-fee-lamports`.
 
 The field is part of the Borsh-encoded `ChainMetadata`, so `metadata_digest`
 changes for every Solana request that sends `chain_metadata`, even when the

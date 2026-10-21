@@ -1,4 +1,4 @@
-use crate::core::priority_fee::{PriorityFee, max_fee_field};
+use crate::core::priority_fee::{PriorityFee, charged_signatures, max_fee_field};
 use crate::core::txtypes::{
     create_address_lookup_table_field, decode_v0_instructions, decode_v0_transfers,
 };
@@ -642,10 +642,15 @@ fn convert_to_visual_sign_payload(
             .map(|e| e.signable_payload_field.clone()),
     );
 
+    // An instruction that failed to render may have been a compute-budget request, so the fee
+    // is unknown and a max fee cannot be checked.
     #[cfg(feature = "diagnostics")]
     let (summary, priority_fee) = (
         decode_result.summary.clone(),
-        decode_result.priority_fee.clone(),
+        decode_result
+            .errors
+            .is_empty()
+            .then(|| decode_result.priority_fee.clone()),
     );
 
     #[cfg(not(feature = "diagnostics"))]
@@ -657,7 +662,7 @@ fn convert_to_visual_sign_payload(
                 .iter()
                 .map(|e| e.signable_payload_field.clone()),
         );
-        (decoded.summary, decoded.priority_fee)
+        (decoded.summary, Some(decoded.priority_fee))
     };
 
     // Decode and sort accounts using the dedicated function
@@ -682,8 +687,12 @@ fn convert_to_visual_sign_payload(
         &mut fields,
         header_end,
         options,
-        Some(&priority_fee),
-        message.header.num_required_signatures,
+        priority_fee.as_ref(),
+        charged_signatures(
+            message.header.num_required_signatures,
+            &message.instructions,
+            &message.account_keys,
+        ),
     )?;
     Ok(SignablePayload::new(
         0,
@@ -725,13 +734,13 @@ fn apply_transaction_summary(
 }
 
 /// Adds the caller's fee cap as a "Max Fee" row after the header rows, once it covers the fee
-/// the transaction commits to. `priority_fee` is `None` when the instructions did not decode.
+/// the transaction commits to. `priority_fee` is `None` when an instruction did not decode.
 fn insert_max_fee(
     fields: &mut Vec<SignablePayloadField>,
     header_end: usize,
     options: &VisualSignOptions,
     priority_fee: Option<&PriorityFee>,
-    num_required_signatures: u8,
+    signatures: u64,
 ) -> Result<(), VisualSignError> {
     let Some(lamports) = solana_metadata(options).and_then(|m| m.max_fee_lamports) else {
         return Ok(());
@@ -743,9 +752,7 @@ fn insert_max_fee(
                 .to_string(),
         )
     })?;
-    priority_fee
-        .committed(num_required_signatures)?
-        .check_cap(lamports)?;
+    priority_fee.committed(signatures)?.check_cap(lamports)?;
     fields.insert(header_end, max_fee_field(lamports)?.signable_payload_field);
     Ok(())
 }
@@ -842,7 +849,10 @@ fn convert_v0_to_visual_sign_payload(
     #[cfg(feature = "diagnostics")]
     let (summary, priority_fee) = (
         v0_result.summary.clone(),
-        Some(v0_result.priority_fee.clone()),
+        v0_result
+            .errors
+            .is_empty()
+            .then(|| v0_result.priority_fee.clone()),
     );
 
     #[cfg(not(feature = "diagnostics"))]
@@ -917,7 +927,11 @@ fn convert_v0_to_visual_sign_payload(
         header_end,
         options,
         priority_fee.as_ref(),
-        v0_message.header.num_required_signatures,
+        charged_signatures(
+            v0_message.header.num_required_signatures,
+            &v0_message.instructions,
+            &v0_message.account_keys,
+        ),
     )?;
     Ok(SignablePayload::new(
         0,
@@ -937,6 +951,7 @@ mod tests {
     };
     use crate::test_utils::payload_from_b64;
     use crate::utils::create_transaction_with_empty_signatures;
+    use base64::Engine;
     use solana_sdk::compute_budget::ComputeBudgetInstruction;
     use solana_sdk::instruction::{AccountMeta, Instruction};
     use solana_sdk::message::Message;
@@ -3028,5 +3043,88 @@ mod tests {
         ));
         to_payload(wrapper, options_with_max_fee(Some(105_000)))
             .expect("a cap equal to the bound passes");
+    }
+
+    fn legacy_b64(instructions: &[Instruction], payer: &Pubkey) -> String {
+        let tx = SolanaTransaction::new_unsigned(Message::new(instructions, Some(payer)));
+        base64::engine::general_purpose::STANDARD
+            .encode(bincode::serialize(&tx).expect("serialize"))
+    }
+
+    fn v0_b64(instructions: &[Instruction], payer: &Pubkey) -> String {
+        let message = solana_sdk::message::v0::Message::try_compile(
+            payer,
+            instructions,
+            &[],
+            solana_sdk::hash::Hash::default(),
+        )
+        .expect("compile");
+        let tx = VersionedTransaction {
+            signatures: vec![solana_sdk::signature::Signature::default()],
+            message: VersionedMessage::V0(message),
+        };
+        base64::engine::general_purpose::STANDARD
+            .encode(bincode::serialize(&tx).expect("serialize"))
+    }
+
+    /// A unit price with a trailing byte: the runtime still charges it, the parser cannot
+    /// decode it, so the fee is unknown and a cap is refused in every build.
+    fn malformed_unit_price() -> Instruction {
+        Instruction {
+            program_id: solana_sdk::compute_budget::id(),
+            accounts: vec![],
+            data: vec![3, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0, 0xff],
+        }
+    }
+
+    /// The base fee also covers the signatures a precompile instruction verifies.
+    #[test]
+    fn max_fee_counts_precompile_signatures() {
+        let payer = Pubkey::new_unique();
+        let verify_two = Instruction {
+            program_id: solana_sdk::ed25519_program::id(),
+            accounts: vec![],
+            data: vec![2, 0, 0, 0],
+        };
+        let wrapper = SolanaTransactionWrapper::from_string(&legacy_b64(&[verify_two], &payer))
+            .expect("parses");
+        // One transaction signature plus two verified ones: 15_000 lamports.
+        assert!(matches!(
+            to_payload(wrapper.clone(), options_with_max_fee(Some(14_999))),
+            Err(VisualSignError::ValidationError(_))
+        ));
+        to_payload(wrapper, options_with_max_fee(Some(15_000)))
+            .expect("a cap equal to the base fee passes");
+    }
+
+    #[test]
+    fn malformed_compute_budget_refuses_a_cap() {
+        let payer = Pubkey::new_unique();
+        let wrapper =
+            SolanaTransactionWrapper::from_string(&legacy_b64(&[malformed_unit_price()], &payer))
+                .expect("parses");
+        let rejected = to_payload(wrapper.clone(), options_with_max_fee(Some(5_000)));
+        assert!(rejected.is_err(), "{rejected:?}");
+        #[cfg(feature = "diagnostics")]
+        {
+            assert!(matches!(rejected, Err(VisualSignError::ValidationError(_))));
+            to_payload(wrapper, options_with_max_fee(None))
+                .expect("the diagnostics build renders without a cap");
+        }
+    }
+
+    /// The V0 converter degrades to a decoding note; a cap it cannot check is still refused.
+    #[test]
+    fn v0_malformed_compute_budget_refuses_a_cap() {
+        let payer = Pubkey::new_unique();
+        let wrapper =
+            SolanaTransactionWrapper::from_string(&v0_b64(&[malformed_unit_price()], &payer))
+                .expect("parses");
+        assert_eq!(wrapper.transaction_type(), "Solana (V0)");
+        assert!(matches!(
+            to_payload(wrapper.clone(), options_with_max_fee(Some(5_000))),
+            Err(VisualSignError::ValidationError(_))
+        ));
+        to_payload(wrapper, options_with_max_fee(None)).expect("renders without a cap");
     }
 }

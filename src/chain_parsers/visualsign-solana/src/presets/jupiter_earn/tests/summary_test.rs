@@ -7,8 +7,9 @@ use super::fixture_test::{
     synthetic_instruction,
 };
 use super::*;
-use crate::core::BASE_FEE_LAMPORTS_PER_SIGNATURE;
-use crate::core::{SolanaTransactionWrapper, SolanaVisualSignConverter};
+use crate::core::{
+    BASE_FEE_LAMPORTS_PER_SIGNATURE, SolanaTransactionWrapper, SolanaVisualSignConverter,
+};
 use crate::intermediate::{RegisteredSource, SolanaIntermediateOutput};
 use crate::test_utils::payload_from_b64;
 use base64::Engine;
