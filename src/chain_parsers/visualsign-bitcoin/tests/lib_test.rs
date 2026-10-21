@@ -1,0 +1,565 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+//! Fixture-driven tests for the Bitcoin PSBT parser.
+//!
+//! Fixture provenance:
+//! - `bip174-*`: test vectors copied verbatim from BIP-174
+//!   (<https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki>, "Test Vectors").
+//! - `bip371-*`: test vectors copied verbatim from BIP-371
+//!   (<https://github.com/bitcoin/bips/blob/master/bip-0371.mediawiki>, "Test Vectors").
+//!   The BIP-174 and BIP-371 vectors were generated on testnet, but a PSBT does not
+//!   name its network, so the golden files render addresses with the default
+//!   mainnet encoding.
+//! - `synthetic-*`: built by this file from the BIP-39 "abandon ... about" seed
+//!   with the BIP-84 / BIP-86 account-0 paths (the keys of the BIP-84 and BIP-86
+//!   test vectors, whose first receive addresses are asserted below). The previous
+//!   transactions are synthetic. `REGEN_FIXTURES=1` rewrites their `.input` files.
+
+use bitcoin::bip32::{DerivationPath, Fingerprint, Xpriv};
+use bitcoin::hashes::Hash;
+use bitcoin::key::TapTweak;
+use bitcoin::psbt::{Psbt, PsbtSighashType};
+use bitcoin::secp256k1::{PublicKey, Secp256k1, XOnlyPublicKey};
+use bitcoin::{
+    Address, Amount, EcdsaSighashType, Network, NetworkKind, OutPoint, ScriptBuf, Sequence,
+    Transaction, TxIn, TxOut, Txid, Witness, absolute, transaction,
+};
+use std::fs;
+use std::path::PathBuf;
+use std::str::FromStr;
+use visualsign::vsptrait::{
+    Transaction as VsTransaction, VisualSignConverter, VisualSignConverterFromString,
+    VisualSignError, VisualSignOptions,
+};
+use visualsign_bitcoin::{BitcoinTransactionWrapper, BitcoinVisualSignConverter};
+
+// BIP-39 seed of "abandon abandon abandon abandon abandon abandon abandon abandon
+// abandon abandon abandon about" with an empty passphrase (BIP-84 / BIP-86 vectors).
+const SEED_HEX: &str = "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4";
+
+fn fixture_path(name: &str) -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("tests");
+    path.push("fixtures");
+    path.push(name);
+    path
+}
+
+fn regen() -> bool {
+    std::env::var("REGEN_FIXTURES")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false)
+}
+
+fn convert_with(
+    data: &str,
+    network: Network,
+) -> Result<visualsign::SignablePayload, VisualSignError> {
+    BitcoinVisualSignConverter::new(network)
+        .to_visual_sign_payload_from_string(data, VisualSignOptions::default())
+        .map(|r| r.payload)
+}
+
+fn convert_json(data: &str) -> String {
+    convert_with(data, Network::Bitcoin)
+        .unwrap()
+        .to_json()
+        .unwrap()
+}
+
+fn read_input(name: &str) -> String {
+    fs::read_to_string(fixture_path(&format!("{name}.input")))
+        .unwrap_or_else(|_| panic!("missing fixture {name}.input"))
+        .trim()
+        .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Synthetic PSBT builders
+// ---------------------------------------------------------------------------
+
+struct Keys {
+    master: Xpriv,
+    fingerprint: Fingerprint,
+}
+
+fn keys() -> Keys {
+    let secp = Secp256k1::new();
+    let seed = hex::decode(SEED_HEX).unwrap();
+    let master = Xpriv::new_master(NetworkKind::Main, &seed).unwrap();
+    let fingerprint = master.fingerprint(&secp);
+    Keys {
+        master,
+        fingerprint,
+    }
+}
+
+fn path(p: &str) -> DerivationPath {
+    DerivationPath::from_str(p).unwrap()
+}
+
+fn pubkey(p: &str) -> PublicKey {
+    let secp = Secp256k1::new();
+    keys()
+        .master
+        .derive_priv(&secp, &path(p))
+        .unwrap()
+        .private_key
+        .public_key(&secp)
+}
+
+fn xonly(p: &str) -> XOnlyPublicKey {
+    pubkey(p).x_only_public_key().0
+}
+
+fn p2wpkh(p: &str) -> ScriptBuf {
+    ScriptBuf::new_p2wpkh(&bitcoin::CompressedPublicKey(pubkey(p)).wpubkey_hash())
+}
+
+fn p2tr(p: &str) -> ScriptBuf {
+    let secp = Secp256k1::verification_only();
+    let (tweaked, _) = xonly(p).tap_tweak(&secp, None);
+    ScriptBuf::new_p2tr_tweaked(tweaked)
+}
+
+fn prev_tx(script: ScriptBuf, value: u64, tag: u32) -> Transaction {
+    Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::from_consensus(tag),
+        input: vec![TxIn {
+            previous_output: OutPoint::new(Txid::all_zeros(), tag),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness: Witness::new(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: script,
+        }],
+    }
+}
+
+fn spend(prev: &Transaction, outputs: Vec<TxOut>) -> Psbt {
+    let tx = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::new(prev.compute_txid(), 0),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::MAX,
+            witness: Witness::new(),
+        }],
+        output: outputs,
+    };
+    Psbt::from_unsigned_tx(tx).unwrap()
+}
+
+fn txout(script: ScriptBuf, value: u64) -> TxOut {
+    TxOut {
+        value: Amount::from_sat(value),
+        script_pubkey: script,
+    }
+}
+
+/// BIP-84 single-sig: 100_000 sat in, 60_000 to a third party, 39_000 change
+/// (carrying derivation data), 1_000 fee. Both UTXO fields present.
+fn p2wpkh_single_sig() -> Psbt {
+    let k = keys();
+    let prev = prev_tx(p2wpkh("m/84'/0'/0'/0/0"), 100_000, 1);
+    let mut p = spend(
+        &prev,
+        vec![
+            txout(p2wpkh("m/84'/0'/7'/0/0"), 60_000),
+            txout(p2wpkh("m/84'/0'/0'/1/0"), 39_000),
+        ],
+    );
+    p.inputs[0].witness_utxo = Some(prev.output[0].clone());
+    p.inputs[0].non_witness_utxo = Some(prev);
+    p.inputs[0].bip32_derivation.insert(
+        pubkey("m/84'/0'/0'/0/0"),
+        (k.fingerprint, path("m/84'/0'/0'/0/0")),
+    );
+    p.outputs[1].bip32_derivation.insert(
+        pubkey("m/84'/0'/0'/1/0"),
+        (k.fingerprint, path("m/84'/0'/0'/1/0")),
+    );
+    p
+}
+
+/// Same spend with the previous transaction omitted: the segwit v0 amount is
+/// only claimed.
+fn p2wpkh_without_prev_tx() -> Psbt {
+    let mut p = p2wpkh_single_sig();
+    p.inputs[0].non_witness_utxo = None;
+    p
+}
+
+/// A previous transaction that does not hash to the prevout txid.
+fn p2wpkh_tampered_non_witness_utxo() -> Psbt {
+    let mut p = p2wpkh_single_sig();
+    p.inputs[0].non_witness_utxo = Some(prev_tx(p2wpkh("m/84'/0'/0'/0/0"), 100_000, 2));
+    p
+}
+
+/// The classic segwit v0 fee attack: `witness_utxo` understates the amount that
+/// the previous transaction pays.
+fn p2wpkh_understated_witness_utxo() -> Psbt {
+    let mut p = p2wpkh_single_sig();
+    p.inputs[0].witness_utxo.as_mut().unwrap().value = Amount::from_sat(70_000);
+    p
+}
+
+/// BIP-86 single-sig taproot key path: witness_utxo only, change carrying
+/// `tap_key_origins`.
+fn p2tr_single_sig() -> Psbt {
+    let k = keys();
+    let prev = prev_tx(p2tr("m/86'/0'/0'/0/0"), 100_000, 3);
+    let mut p = spend(
+        &prev,
+        vec![
+            txout(p2tr("m/86'/0'/5'/0/0"), 70_000),
+            txout(p2tr("m/86'/0'/0'/1/0"), 29_000),
+        ],
+    );
+    p.inputs[0].witness_utxo = Some(prev.output[0].clone());
+    let x = xonly("m/86'/0'/0'/0/0");
+    p.inputs[0].tap_internal_key = Some(x);
+    p.inputs[0]
+        .tap_key_origins
+        .insert(x, (vec![], (k.fingerprint, path("m/86'/0'/0'/0/0"))));
+    let c = xonly("m/86'/0'/0'/1/0");
+    p.outputs[1].tap_internal_key = Some(c);
+    p.outputs[1]
+        .tap_key_origins
+        .insert(c, (vec![], (k.fingerprint, path("m/86'/0'/0'/1/0"))));
+    p
+}
+
+fn hex_of(p: &Psbt) -> String {
+    hex::encode(p.serialize())
+}
+
+fn encode(p: &Psbt) -> String {
+    hex_of(p)
+}
+
+fn json_of(p: &Psbt) -> String {
+    convert_json(&encode(p))
+}
+
+type SyntheticBuilder = (&'static str, fn() -> Psbt);
+
+const SYNTHETIC: [SyntheticBuilder; 5] = [
+    ("synthetic-p2wpkh-single-sig", p2wpkh_single_sig),
+    ("synthetic-p2wpkh-no-prev-tx", p2wpkh_without_prev_tx),
+    (
+        "synthetic-p2wpkh-tampered-non-witness-utxo",
+        p2wpkh_tampered_non_witness_utxo,
+    ),
+    (
+        "synthetic-p2wpkh-understated-witness-utxo",
+        p2wpkh_understated_witness_utxo,
+    ),
+    ("synthetic-p2tr-single-sig", p2tr_single_sig),
+];
+
+/// PSBTs that must decode, with their golden output.
+static VALID_FIXTURES: [&str; 11] = [
+    "bip174-p2pkh",
+    "bip174-p2pkh-and-p2sh-p2wpkh-signed",
+    "bip174-p2sh-p2wsh-multisig",
+    "bip174-p2wsh-multisig",
+    "bip174-unknown-types",
+    "bip371-p2tr-keypath-input",
+    "bip371-p2tr-keypath-output",
+    "bip371-p2tr-scriptpath-input",
+    "synthetic-p2wpkh-single-sig",
+    "synthetic-p2wpkh-no-prev-tx",
+    "synthetic-p2tr-single-sig",
+];
+
+/// PSBTs that must be rejected.
+static REJECTED_FIXTURES: [&str; 7] = [
+    "bip174-invalid-not-psbt",
+    "bip174-invalid-missing-outputs",
+    "bip174-invalid-scriptsig-in-unsigned-tx",
+    "bip174-invalid-duplicate-keys",
+    "bip371-invalid-tap-key-sig-too-short",
+    "synthetic-p2wpkh-tampered-non-witness-utxo",
+    "synthetic-p2wpkh-understated-witness-utxo",
+];
+
+#[test]
+fn synthetic_keys_match_bip84_and_bip86_vectors() {
+    let secp = Secp256k1::verification_only();
+    let bip84 = Address::p2wpkh(
+        &bitcoin::CompressedPublicKey(pubkey("m/84'/0'/0'/0/0")),
+        Network::Bitcoin,
+    );
+    assert_eq!(
+        bip84.to_string(),
+        "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+    );
+    let bip86 = Address::p2tr(&secp, xonly("m/86'/0'/0'/0/0"), None, Network::Bitcoin);
+    assert_eq!(
+        bip86.to_string(),
+        "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
+    );
+}
+
+#[test]
+fn synthetic_fixtures_are_reproducible() {
+    for (name, build) in SYNTHETIC {
+        let built = hex_of(&build());
+        let path = fixture_path(&format!("{name}.input"));
+        if regen() {
+            fs::write(&path, format!("{built}\n")).unwrap();
+            continue;
+        }
+        assert_eq!(built, read_input(name), "fixture {name} is stale");
+    }
+}
+
+#[test]
+fn test_with_fixtures() {
+    for name in VALID_FIXTURES {
+        let actual = convert_json(&read_input(name));
+        let expected_path = fixture_path(&format!("{name}.expected"));
+        // `REGEN_FIXTURES=1 cargo test -p visualsign-bitcoin` rewrites every `.expected`
+        // from the current output. Review the diff: an intended change and a regression
+        // look identical here.
+        if regen() {
+            fs::write(&expected_path, format!("{}\n", actual.trim_end())).unwrap();
+            continue;
+        }
+        let expected = fs::read_to_string(&expected_path)
+            .unwrap_or_else(|_| panic!("missing {expected_path:?}"));
+        assert_eq!(actual.trim(), expected.trim(), "fixture '{name}' differs");
+    }
+}
+
+#[test]
+fn rejected_fixtures_fail_to_convert() {
+    for name in REJECTED_FIXTURES {
+        let result = convert_with(&read_input(name), Network::Bitcoin);
+        assert!(result.is_err(), "{name} should be rejected, got {result:?}");
+    }
+}
+
+#[test]
+fn output_is_ascii_only() {
+    for name in VALID_FIXTURES {
+        let json = convert_json(&read_input(name));
+        assert!(json.is_ascii(), "{name} produced non-ASCII output");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Behaviour
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hex_base64_and_prefixed_hex_agree() {
+    use base64::Engine as _;
+    let p = p2wpkh_single_sig();
+    let bytes = p.serialize();
+    let as_hex = hex::encode(&bytes);
+    let as_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let expected = convert_json(&as_hex);
+    assert_eq!(convert_json(&as_b64), expected);
+    assert_eq!(convert_json(&format!("0x{as_hex}")), expected);
+    assert_eq!(convert_json(&format!("  {as_hex}\n")), expected);
+}
+
+#[test]
+fn verified_fee_and_change_claim_are_reported() {
+    let json = json_of(&p2wpkh_single_sig());
+    assert!(json.contains(r#""Label":"Fee""#));
+    assert!(
+        json.contains(r#""FallbackText":"0.00001000 BTC""#),
+        "{json}"
+    );
+    assert!(json.contains("claims change (unverified by parser)"));
+    assert!(json.contains(r#""Label":"Change""#));
+    // Only the output with derivation data (Output 1) makes the claim.
+    assert!(json.contains("0.00039000 BTC - claims change (unverified by parser)"));
+    assert!(!json.contains("0.00060000 BTC - claims change"));
+    assert!(json.contains("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"));
+    assert!(json.contains("verified against previous transaction"));
+}
+
+#[test]
+fn segwit_v0_without_prev_tx_flags_fee_unverified() {
+    let json = json_of(&p2wpkh_without_prev_tx());
+    assert!(json.contains("0.00001000 BTC (unverified:"), "{json}");
+    assert!(json.contains("claimed by witness_utxo only"));
+}
+
+#[test]
+fn all_taproot_inputs_bind_the_fee() {
+    let json = json_of(&p2tr_single_sig());
+    assert!(!json.contains("unverified: input amounts"), "{json}");
+    assert!(
+        json.contains(r#""FallbackText":"0.00001000 BTC""#),
+        "{json}"
+    );
+    assert!(json.contains("claims change (unverified by parser)"));
+}
+
+#[test]
+fn mixed_taproot_and_v0_claims_are_unverified() {
+    // One claimed taproot input next to one claimed v0 input: a v0 signature does
+    // not commit to the taproot amount, so the fee cannot be trusted.
+    let v0_prev = prev_tx(p2wpkh("m/84'/0'/0'/0/0"), 50_000, 7);
+    let tr_prev = prev_tx(p2tr("m/86'/0'/0'/0/0"), 50_000, 8);
+    let mut p = p2tr_single_sig();
+    p.unsigned_tx.input = vec![
+        TxIn {
+            previous_output: OutPoint::new(v0_prev.compute_txid(), 0),
+            ..p.unsigned_tx.input[0].clone()
+        },
+        TxIn {
+            previous_output: OutPoint::new(tr_prev.compute_txid(), 0),
+            ..p.unsigned_tx.input[0].clone()
+        },
+    ];
+    let v0_in = bitcoin::psbt::Input {
+        witness_utxo: Some(v0_prev.output[0].clone()),
+        ..Default::default()
+    };
+    let tr_in = bitcoin::psbt::Input {
+        witness_utxo: Some(tr_prev.output[0].clone()),
+        ..Default::default()
+    };
+    p.inputs = vec![v0_in, tr_in];
+    let json = json_of(&p);
+    assert!(json.contains("(unverified: input amounts"), "{json}");
+}
+
+#[test]
+fn missing_utxo_data_means_unknown_fee() {
+    let mut p = p2wpkh_single_sig();
+    p.inputs[0].witness_utxo = None;
+    p.inputs[0].non_witness_utxo = None;
+    let json = json_of(&p);
+    assert!(json.contains("unknown (input amounts missing)"), "{json}");
+    assert!(json.contains("amount unknown"));
+}
+
+#[test]
+fn outputs_exceeding_inputs_are_rejected() {
+    let mut p = p2wpkh_single_sig();
+    p.unsigned_tx.output[0].value = Amount::from_sat(70_000);
+    let err = convert_with(&encode(&p), Network::Bitcoin).unwrap_err();
+    assert!(err.to_string().contains("outputs exceed inputs"), "{err}");
+}
+
+#[test]
+fn tampered_non_witness_utxo_error_names_the_cause() {
+    let err = convert_with(
+        &encode(&p2wpkh_tampered_non_witness_utxo()),
+        Network::Bitcoin,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("does not match the prevout txid"),
+        "{err}"
+    );
+    let err = convert_with(
+        &encode(&p2wpkh_understated_witness_utxo()),
+        Network::Bitcoin,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("witness_utxo disagrees"), "{err}");
+}
+
+#[test]
+fn prevout_index_out_of_range_is_rejected() {
+    let mut p = p2wpkh_single_sig();
+    p.unsigned_tx.input[0].previous_output.vout = 5;
+    let err = convert_with(&encode(&p), Network::Bitcoin).unwrap_err();
+    assert!(err.to_string().contains("out of range"), "{err}");
+}
+
+#[test]
+fn non_default_sighash_is_surfaced() {
+    let mut p = p2wpkh_single_sig();
+    p.inputs[0].sighash_type = Some(PsbtSighashType::from(
+        EcdsaSighashType::NonePlusAnyoneCanPay,
+    ));
+    let json = json_of(&p);
+    assert!(json.contains("Sighash Type"), "{json}");
+    assert!(json.contains("SIGHASH_NONE|SIGHASH_ANYONECANPAY"), "{json}");
+
+    let mut p = p2wpkh_single_sig();
+    p.inputs[0].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::All));
+    assert!(!json_of(&p).contains("Sighash Type"));
+}
+
+#[test]
+fn op_return_output_shows_script_not_address() {
+    let mut p = p2wpkh_single_sig();
+    let data = bitcoin::script::PushBytesBuf::try_from(b"hello".to_vec()).unwrap();
+    p.unsigned_tx
+        .output
+        .push(txout(ScriptBuf::new_op_return(data), 0));
+    p.outputs.push(Default::default());
+    let json = json_of(&p);
+    assert!(json.contains("OP_RETURN"), "{json}");
+    assert!(json.contains("6a0568656c6c6f"), "{json}");
+}
+
+#[test]
+fn network_selects_the_address_encoding() {
+    let data = encode(&p2wpkh_single_sig());
+    let mainnet = convert_with(&data, Network::Bitcoin)
+        .unwrap()
+        .to_json()
+        .unwrap();
+    let testnet = convert_with(&data, Network::Testnet)
+        .unwrap()
+        .to_json()
+        .unwrap();
+    assert!(mainnet.contains("Bitcoin Mainnet") && mainnet.contains("bc1q"));
+    assert!(testnet.contains("Bitcoin Testnet") && testnet.contains("tb1q"));
+    assert!(!testnet.contains("bc1q"));
+}
+
+#[test]
+fn transaction_name_overrides_title() {
+    let wrapper = BitcoinTransactionWrapper::from_string(&encode(&p2wpkh_single_sig())).unwrap();
+    let options = VisualSignOptions {
+        transaction_name: Some("Send BTC".into()),
+        ..Default::default()
+    };
+    let payload = BitcoinVisualSignConverter::default()
+        .to_visual_sign_payload(wrapper, options)
+        .unwrap()
+        .payload;
+    assert_eq!(payload.title, "Send BTC");
+    assert_eq!(payload.payload_type, "BitcoinTx");
+}
+
+#[test]
+fn malformed_and_oversized_input_is_rejected() {
+    for bad in ["", "not a psbt", "70736274ff", "zz", "0x", "cHNidP8"] {
+        assert!(
+            BitcoinTransactionWrapper::from_string(bad).is_err(),
+            "{bad:?} should be rejected"
+        );
+    }
+    let huge = "a".repeat(4 * 1024 * 1024 + 2);
+    assert!(BitcoinTransactionWrapper::from_string(&huge).is_err());
+}
+
+#[test]
+fn parse_network_accepts_known_names() {
+    assert_eq!(
+        visualsign_bitcoin::parse_network("bitcoin"),
+        Ok(Network::Bitcoin)
+    );
+    assert_eq!(
+        visualsign_bitcoin::parse_network("SIGNET"),
+        Ok(Network::Signet)
+    );
+    assert!(visualsign_bitcoin::parse_network("litecoin").is_err());
+}

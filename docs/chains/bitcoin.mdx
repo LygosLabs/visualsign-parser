@@ -1,0 +1,58 @@
+---
+title: Bitcoin
+description: Partially Signed Bitcoin Transactions (BIP-174) with fee and change safety flags
+---
+
+The Bitcoin module decodes Partially Signed Bitcoin Transactions (PSBTs) into VisualSign payloads: what is being spent, who is being paid, and the fee.
+
+## Architecture overview
+
+### Transaction model
+- **Encoding**: BIP-174 PSBT version 0, supplied as base64 or hex (an optional `0x` prefix is accepted). PSBT v2 (BIP-370) is not supported.
+- **UTXO model**: the PSBT carries the unsigned transaction plus per-input metadata (`witness_utxo`, `non_witness_utxo`, derivation paths, scripts).
+- **Address encoding**: a PSBT does not name its network. Addresses are encoded for mainnet by default; `parser_cli` takes `--bitcoin-network` (`bitcoin`, `testnet`, `testnet4`, `signet`, `regtest`).
+
+### Key components
+
+The Bitcoin parser produces:
+- `Network`
+- One expandable `Input N` per input: outpoint, address, script type, amount, and where the amount came from.
+- One expandable `Output N` per output: address (or the raw script for `OP_RETURN` and other non-address scripts), script type and amount.
+- `Fee`, and `Lock Time` when non-zero.
+
+## What the parser can and cannot vouch for
+
+The parser holds no keys. It checks what a PSBT can prove on its own and flags the rest.
+
+| Situation | Behavior |
+|---|---|
+| `non_witness_utxo` does not hash to the prevout txid, or the output index is out of range | Rejected |
+| `witness_utxo` disagrees with `non_witness_utxo` | Rejected |
+| Outputs exceed inputs | Rejected |
+| Every input amount verified through its previous transaction | `Fee` shown as an amount |
+| Every input spends a taproot output | `Fee` shown as an amount (a BIP-341 signature commits to all input amounts) |
+| Any other input amount known only from `witness_utxo` | `Fee` shown with `(unverified: ...)`. A segwit v0 signature commits only to its own input amount, so a wrong `witness_utxo` can hide a large fee. |
+| An input has no UTXO data | `Fee` shown as `unknown` |
+| An output carries `bip32_derivation` or `tap_key_origins` | Labeled `claims change (unverified by parser)`. The parser cannot check that the keys belong to the signer. |
+| Input requests a sighash type other than ALL/DEFAULT | A `Sighash Type` field is shown |
+
+Change verification (deriving the claimed change key from an account xpub) needs key material the parser does not have, and belongs in the signer.
+
+## Using parser_cli
+
+```bash
+cargo run --bin parser_cli -- decode \
+  --chain bitcoin \
+  --bitcoin-network bitcoin \
+  --output human \
+  -t "$(cat chain_parsers/visualsign-bitcoin/tests/fixtures/synthetic-p2wpkh-single-sig.input)"
+```
+
+## Test vectors
+
+Fixtures live in `src/chain_parsers/visualsign-bitcoin/tests/fixtures/`. The `bip174-*` and `bip371-*` files are copied from the test vectors in [BIP-174](https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki) and [BIP-371](https://github.com/bitcoin/bips/blob/master/bip-0371.mediawiki); the `synthetic-*` files are built by the test suite from the BIP-84/BIP-86 test-vector keys.
+
+## Implementation details
+
+Source code available at:
+- [Bitcoin Parser](https://github.com/anchorageoss/visualsign-parser/tree/main/src/chain_parsers/visualsign-bitcoin)
