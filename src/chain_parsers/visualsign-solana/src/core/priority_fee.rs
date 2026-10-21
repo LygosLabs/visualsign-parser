@@ -15,7 +15,7 @@ pub const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 
 const MICRO_LAMPORTS_PER_LAMPORT: u128 = 1_000_000;
 
-/// Base fee the runtime charges per required signature, in lamports.
+/// Base fee the runtime charges per signature, in lamports; see [`charged_signatures`].
 pub const BASE_FEE_LAMPORTS_PER_SIGNATURE: u64 = 5_000;
 
 /// Not re-exported by `solana_sdk` yet; the id from `solana_sdk_ids::secp256r1_program`.
