@@ -278,7 +278,8 @@ pub struct SolanaMetadata {
         ::prost::alloc::string::String,
     >,
     /// Maximum total fee (base plus priority) the caller allows for this transaction, in
-    /// lamports. Rendered as the top-level "Max Fee" row when present.
+    /// lamports. Rendered as the top-level "Max Fee" row when present. The parser rejects the
+    /// request when the fee the transaction commits to exceeds it, so the row is a true cap.
     #[prost(uint64, optional, tag = "6")]
     #[cfg_attr(
         feature = "serde_derive",

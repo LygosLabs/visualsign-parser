@@ -30,8 +30,8 @@ pub struct SolanaArgs {
     #[arg(long = "simulated-tx-result", value_name = "BASE64")]
     pub simulated_tx_result: Option<String>,
 
-    /// Maximum total fee the caller allows, in lamports; rendered as the "Max Fee"
-    /// row. Same value the API's `max_fee_lamports` field carries.
+    /// Maximum total fee the caller allows, in lamports; rendered as the "Max Fee" row and
+    /// rejected when the transaction commits to more. Same as the API's `max_fee_lamports`.
     #[arg(long = "max-fee-lamports", value_name = "LAMPORTS")]
     pub max_fee_lamports: Option<u64>,
 }

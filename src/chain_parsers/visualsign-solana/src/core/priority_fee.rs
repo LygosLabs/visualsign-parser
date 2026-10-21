@@ -12,6 +12,9 @@ pub const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 
 const MICRO_LAMPORTS_PER_LAMPORT: u128 = 1_000_000;
 
+/// Base fee the runtime charges per required signature, in lamports.
+pub const BASE_FEE_LAMPORTS_PER_SIGNATURE: u64 = 5_000;
+
 const SOL_DECIMALS: u8 = 9;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -56,6 +59,22 @@ impl PriorityFee {
             None => PriorityFeeEstimate::UpperBound(lamports(price, MAX_COMPUTE_UNIT_LIMIT)),
         })
     }
+
+    /// The fee the transaction commits to: the base fee for its signatures plus the priority
+    /// fee. Fails closed on a repeated price or limit, which the runtime rejects.
+    pub fn committed(&self, num_required_signatures: u8) -> Result<CommittedFee, VisualSignError> {
+        if self.is_invalid() {
+            return Err(VisualSignError::ValidationError(
+                "the fee this transaction commits to cannot be determined: repeated compute unit \
+                 price or limit"
+                    .to_string(),
+            ));
+        }
+        Ok(CommittedFee {
+            base: BASE_FEE_LAMPORTS_PER_SIGNATURE * u64::from(num_required_signatures),
+            priority: self.estimate(),
+        })
+    }
 }
 
 impl PriorityFeeEstimate {
@@ -78,7 +97,43 @@ impl PriorityFeeEstimate {
     }
 }
 
-/// Top-level "Max Fee" row: the maximum total fee the caller allows, in lamports.
+/// Base fee plus priority fee, in lamports: the most the transaction pays if it lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommittedFee {
+    base: u64,
+    priority: Option<PriorityFeeEstimate>,
+}
+
+impl CommittedFee {
+    pub fn lamports(self) -> u64 {
+        self.base
+            .saturating_add(self.priority.map_or(0, PriorityFeeEstimate::lamports))
+    }
+
+    /// Rejects a fee cap below the committed fee, so a "Max Fee" row is never lower than what
+    /// the transaction pays.
+    pub fn check_cap(self, max_fee_lamports: u64) -> Result<(), VisualSignError> {
+        let total = self.lamports();
+        if max_fee_lamports >= total {
+            return Ok(());
+        }
+        let priority = match self.priority {
+            None => "no priority fee".to_string(),
+            Some(PriorityFeeEstimate::Exact(lamports)) => format!("{lamports} priority fee"),
+            Some(PriorityFeeEstimate::UpperBound(lamports)) => {
+                format!("up to {lamports} priority fee with no compute unit limit")
+            }
+        };
+        Err(VisualSignError::ValidationError(format!(
+            "max fee of {max_fee_lamports} lamports is below the fee this transaction commits to: \
+             {total} lamports ({base} base fee plus {priority})",
+            base = self.base
+        )))
+    }
+}
+
+/// Top-level "Max Fee" row. Rendered only once [`CommittedFee::check_cap`] passes, so the value
+/// is a true upper bound on what the transaction pays rather than the caller's bare claim.
 pub fn max_fee_field(lamports: u64) -> Result<AnnotatedPayloadField, VisualSignError> {
     create_amount_field(
         "Max Fee",
@@ -190,6 +245,89 @@ mod tests {
     #[test]
     fn test_fee_saturates_instead_of_overflowing() {
         assert_eq!(lamports(u64::MAX, MAX_COMPUTE_UNIT_LIMIT), u64::MAX);
+    }
+
+    #[test]
+    fn test_committed_fee_adds_the_base_fee_per_signature() {
+        let base_only = PriorityFee::default().committed(2).unwrap();
+        assert_eq!(base_only.lamports(), 10_000);
+
+        let exact = fee_with(&[
+            ComputeBudgetInstruction::SetComputeUnitLimit(300_000),
+            ComputeBudgetInstruction::SetComputeUnitPrice(50_000),
+        ])
+        .committed(1)
+        .unwrap();
+        assert_eq!(exact.lamports(), 20_000);
+
+        let bound = fee_with(&[ComputeBudgetInstruction::SetComputeUnitPrice(1_000)])
+            .committed(1)
+            .unwrap();
+        assert_eq!(bound.lamports(), 5_000 + 1_400);
+    }
+
+    #[test]
+    fn test_committed_fee_saturates_and_fails_closed_on_duplicates() {
+        let huge = fee_with(&[
+            ComputeBudgetInstruction::SetComputeUnitLimit(MAX_COMPUTE_UNIT_LIMIT),
+            ComputeBudgetInstruction::SetComputeUnitPrice(u64::MAX),
+        ]);
+        assert_eq!(huge.committed(1).unwrap().lamports(), u64::MAX);
+
+        let twice_priced = fee_with(&[
+            ComputeBudgetInstruction::SetComputeUnitPrice(1),
+            ComputeBudgetInstruction::SetComputeUnitPrice(2),
+        ]);
+        assert!(matches!(
+            twice_priced.committed(1),
+            Err(VisualSignError::ValidationError(_))
+        ));
+    }
+
+    #[test]
+    fn test_cap_must_cover_the_committed_fee() {
+        let fee = fee_with(&[
+            ComputeBudgetInstruction::SetComputeUnitLimit(300_000),
+            ComputeBudgetInstruction::SetComputeUnitPrice(50_000),
+        ])
+        .committed(1)
+        .unwrap();
+        fee.check_cap(20_000).unwrap();
+        fee.check_cap(u64::MAX).unwrap();
+        let Err(VisualSignError::ValidationError(message)) = fee.check_cap(19_999) else {
+            panic!("a cap below the committed fee must be rejected");
+        };
+        assert_eq!(
+            message,
+            "max fee of 19999 lamports is below the fee this transaction commits to: \
+             20000 lamports (5000 base fee plus 15000 priority fee)"
+        );
+    }
+
+    #[test]
+    fn test_cap_error_names_the_priority_fee_shape() {
+        let bound = fee_with(&[ComputeBudgetInstruction::SetComputeUnitPrice(1_000)])
+            .committed(1)
+            .unwrap();
+        let Err(VisualSignError::ValidationError(message)) = bound.check_cap(6_399) else {
+            panic!("a cap below the bound must be rejected");
+        };
+        assert!(
+            message.ends_with(
+                "6400 lamports (5000 base fee plus up to 1400 priority fee with no compute unit \
+                 limit)"
+            ),
+            "{message}"
+        );
+
+        let base_only = PriorityFee::default().committed(1).unwrap();
+        let Err(VisualSignError::ValidationError(message)) = base_only.check_cap(0) else {
+            panic!("a zero cap must be rejected");
+        };
+        assert!(
+            message.ends_with("5000 lamports (5000 base fee plus no priority fee)"),
+            "{message}"
+        );
     }
 
     #[test]

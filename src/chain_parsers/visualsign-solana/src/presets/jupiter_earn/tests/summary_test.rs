@@ -7,6 +7,7 @@ use super::fixture_test::{
     synthetic_instruction,
 };
 use super::*;
+use crate::core::BASE_FEE_LAMPORTS_PER_SIGNATURE;
 use crate::core::{SolanaTransactionWrapper, SolanaVisualSignConverter};
 use crate::intermediate::{RegisteredSource, SolanaIntermediateOutput};
 use crate::test_utils::payload_from_b64;
@@ -21,6 +22,7 @@ use solana_sdk::{
     transaction::{Transaction, VersionedTransaction},
 };
 use std::str::FromStr;
+use visualsign::errors::VisualSignError;
 use visualsign::vsptrait::{Transaction as _, VisualSignConverter, VisualSignOptions};
 use visualsign::{SignablePayload, SignablePayloadField};
 
@@ -55,6 +57,14 @@ fn payload_with_max_fee(
     payer: &Pubkey,
     max_fee_lamports: u64,
 ) -> SignablePayload {
+    try_payload_with_max_fee(instructions, payer, max_fee_lamports).expect("visualize")
+}
+
+fn try_payload_with_max_fee(
+    instructions: &[Instruction],
+    payer: &Pubkey,
+    max_fee_lamports: u64,
+) -> Result<SignablePayload, VisualSignError> {
     let options = VisualSignOptions {
         metadata: Some(ChainMetadata {
             metadata: Some(Metadata::Solana(SolanaMetadata {
@@ -72,7 +82,6 @@ fn payload_with_max_fee(
         &legacy_transaction_b64(instructions, payer),
         options,
     )
-    .expect("visualize")
 }
 
 fn top_level_value(payload: &SignablePayload, label: &str) -> Option<String> {
@@ -286,6 +295,29 @@ fn test_max_fee_follows_the_hoisted_priority_fee() {
     );
     assert_eq!(top_level_value(&payload, "Max Fee").unwrap(), "0.005105");
     payload.validate_charset().unwrap();
+}
+
+/// A cap below the base fee plus the committed priority fee is rejected, not rendered.
+#[test]
+fn test_max_fee_below_the_committed_fee_is_rejected() {
+    let deposit = instruction_from_fixture(&load_fixture("deposit_usdc"));
+    let payer = deposit.accounts[0].pubkey;
+    let compute_limit =
+        solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_limit(300_000);
+    let compute_price =
+        solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_price(50_000);
+    let instructions = [compute_limit, compute_price, deposit];
+    let signatures = Message::new(&instructions, Some(&payer))
+        .header
+        .num_required_signatures;
+    let committed = BASE_FEE_LAMPORTS_PER_SIGNATURE * u64::from(signatures) + 15_000;
+
+    assert!(matches!(
+        try_payload_with_max_fee(&instructions, &payer, committed - 1),
+        Err(VisualSignError::ValidationError(_))
+    ));
+    let payload = payload_with_max_fee(&instructions, &payer, committed);
+    assert!(top_level_labels(&payload).contains(&"Max Fee"));
 }
 
 /// No unit limit: the fee row is an upper bound at the runtime maximum and says so.
