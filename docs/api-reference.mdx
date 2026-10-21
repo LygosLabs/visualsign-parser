@@ -73,7 +73,7 @@ message SolanaMetadata {
   optional Idl idl = 1;                 // Anchor IDL for decoding (single program)
   map<string, Idl> idl_mappings = 3;    // Map of program_id to IDL (multiple programs)
   optional string simulated_transaction_result = 5; // Base64 simulateTransaction result, for inner (CPI) instructions
-  optional uint64 max_fee_lamports = 6; // Fee ceiling the wallet endorsed, rendered as the "Max Fee" row
+  optional uint64 max_fee_lamports = 6; // Maximum total fee the caller allows, in lamports; rendered as the "Max Fee" row
 }
 ```
 
@@ -188,11 +188,12 @@ grpcurl -plaintext -d '{
 }' localhost:44020 parser.ParserService/Parse
 ```
 
-### Solana with an endorsed max fee
+### Solana with a max fee
 
 ```bash
-# Solana with the fee ceiling the wallet endorsed, in lamports. The parser
-# renders it as a top-level "Max Fee" row right after the header rows.
+# Solana with the maximum total fee the caller allows, in lamports. The parser
+# renders it as a top-level "Max Fee" row right after the header rows. Over the
+# HTTP gateway the same field is the camelCase key `maxFeeLamports`.
 grpcurl -plaintext -d '{
   "unsigned_payload": "AgAAAAAAAA...",
   "chain": "CHAIN_SOLANA",

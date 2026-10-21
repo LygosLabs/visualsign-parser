@@ -22,8 +22,8 @@ const SERDE_ABI_TYPE: &str =
 // emit those rather than the raw i32. See `token_origin_chain_serde` in the
 // generated crate.
 const SERDE_TOKEN_ORIGIN_CHAIN: &str = "#[cfg_attr(feature = \"serde_derive\", serde(with = \"crate::token_origin_chain_serde\", default))]";
-// `uint64` crosses JSON as a decimal string under protojson (Turnkey's hosted
-// gateway) and as a number under serde; accept both. See `u64_or_string_serde`.
+// The proto3 JSON mapping encodes `uint64` as a decimal string, while serde
+// emits a number; accept both. See `u64_or_string_serde`.
 const SERDE_U64_OR_STRING: &str = "#[cfg_attr(feature = \"serde_derive\", serde(with = \"crate::u64_or_string_serde\", default))]";
 const BORSH_ENUM_DISC_ATTR: &str = "#[borsh(use_discriminant=true)]";
 // Exclude a field from the derived Borsh encoding. Used for
@@ -77,6 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ".parser.TokenMetadataEntry.origin_chain",
             SERDE_TOKEN_ORIGIN_CHAIN,
         )
+        // Accept uint64 as a JSON number or a decimal string
         .field_attribute(
             ".parser.SolanaMetadata.max_fee_lamports",
             SERDE_U64_OR_STRING,

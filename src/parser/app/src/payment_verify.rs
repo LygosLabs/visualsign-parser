@@ -713,10 +713,10 @@ mod tests {
         // Companion to the Ethereum test above: pins the Solana variant's
         // discriminant (1) plus `SolanaMetadata`'s own declaration order
         // (`network_id` tag 2, then `idl` tag 1, then `idl_mappings` tag 3,
-        // then `simulated_transaction_result` tag 5), so swapping Solana and
-        // Near in the `.proto` oneof, or reordering `SolanaMetadata`'s
-        // fields, fails this test instead of silently changing the
-        // `request_hash` preimage.
+        // then `simulated_transaction_result` tag 5, then `max_fee_lamports`
+        // tag 6), so swapping Solana and Near in the `.proto` oneof, or
+        // reordering `SolanaMetadata`'s fields, fails this test instead of
+        // silently changing the `request_hash` preimage.
         fn encode_idl(idl: &Idl, buf: &mut Vec<u8>) {
             buf.extend_from_slice(&u32::try_from(idl.value.len()).unwrap().to_le_bytes());
             buf.extend_from_slice(idl.value.as_bytes());

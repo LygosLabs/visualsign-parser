@@ -78,9 +78,8 @@ impl PriorityFeeEstimate {
     }
 }
 
-/// Top-level "Max Fee" row: the fee ceiling the wallet endorsed, which the signer
-/// enforces against the sign-time compute budget.
-pub fn endorsed_max_fee_field(lamports: u64) -> Result<AnnotatedPayloadField, VisualSignError> {
+/// Top-level "Max Fee" row: the maximum total fee the caller allows, in lamports.
+pub fn max_fee_field(lamports: u64) -> Result<AnnotatedPayloadField, VisualSignError> {
     create_amount_field(
         "Max Fee",
         &format_token_amount(lamports, SOL_DECIMALS),
@@ -173,8 +172,8 @@ mod tests {
     }
 
     #[test]
-    fn test_endorsed_max_fee_field_renders_lamports_as_sol() {
-        let field = endorsed_max_fee_field(5_105_000).unwrap();
+    fn test_max_fee_field_renders_lamports_as_sol() {
+        let field = max_fee_field(5_105_000).unwrap();
         let SignablePayloadField::AmountV2 { amount_v2, common } = field.signable_payload_field
         else {
             panic!("expected amount_v2");
@@ -184,7 +183,7 @@ mod tests {
         assert_eq!(amount_v2.amount, "0.005105");
         assert_eq!(amount_v2.abbreviation.as_deref(), Some("SOL"));
 
-        let zero = endorsed_max_fee_field(0).unwrap();
+        let zero = max_fee_field(0).unwrap();
         assert_eq!(zero.signable_payload_field.fallback_text(), "0 SOL");
     }
 

@@ -277,8 +277,8 @@ pub struct SolanaMetadata {
     pub simulated_transaction_result: ::core::option::Option<
         ::prost::alloc::string::String,
     >,
-    /// Fee ceiling the wallet endorsed, in lamports (base plus priority fee). Rendered
-    /// as the top-level "Max Fee" row; omitted when the wallet endorses no ceiling.
+    /// Maximum total fee (base plus priority) the caller allows for this transaction, in
+    /// lamports. Rendered as the top-level "Max Fee" row when present.
     #[prost(uint64, optional, tag = "6")]
     #[cfg_attr(
         feature = "serde_derive",

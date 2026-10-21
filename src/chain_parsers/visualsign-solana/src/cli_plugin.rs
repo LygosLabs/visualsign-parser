@@ -30,7 +30,7 @@ pub struct SolanaArgs {
     #[arg(long = "simulated-tx-result", value_name = "BASE64")]
     pub simulated_tx_result: Option<String>,
 
-    /// Fee ceiling the wallet endorsed, in lamports; rendered as the "Max Fee"
+    /// Maximum total fee the caller allows, in lamports; rendered as the "Max Fee"
     /// row. Same value the API's `max_fee_lamports` field carries.
     #[arg(long = "max-fee-lamports", value_name = "LAMPORTS")]
     pub max_fee_lamports: Option<u64>,
@@ -104,8 +104,8 @@ fn build_idl_mappings_from_files(idl_json_mappings: &[String]) -> (BTreeMap<Stri
     )
 }
 
-/// Creates Solana chain metadata from IDL mappings, a simulation result, and/or an
-/// endorsed max fee. Returns `None` if none is provided.
+/// Creates Solana chain metadata from IDL mappings, a simulation result, and/or a
+/// max fee. Returns `None` if none is provided.
 #[must_use]
 pub(crate) fn create_chain_metadata(
     idl_json_mappings: &[String],

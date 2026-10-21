@@ -11,6 +11,7 @@ use crate::core::{SolanaTransactionWrapper, SolanaVisualSignConverter};
 use crate::intermediate::{RegisteredSource, SolanaIntermediateOutput};
 use crate::test_utils::payload_from_b64;
 use base64::Engine;
+use generated::parser::{ChainMetadata, SolanaMetadata, chain_metadata::Metadata};
 use solana_sdk::{
     hash::Hash,
     instruction::Instruction,
@@ -49,12 +50,11 @@ fn payload_for(instructions: &[Instruction], payer: &Pubkey) -> SignablePayload 
     payload_from_b64(&legacy_transaction_b64(instructions, payer))
 }
 
-fn payload_with_endorsed_max_fee(
+fn payload_with_max_fee(
     instructions: &[Instruction],
     payer: &Pubkey,
     max_fee_lamports: u64,
 ) -> SignablePayload {
-    use generated::parser::{ChainMetadata, SolanaMetadata, chain_metadata::Metadata};
     let options = VisualSignOptions {
         metadata: Some(ChainMetadata {
             metadata: Some(Metadata::Solana(SolanaMetadata {
@@ -255,9 +255,9 @@ fn test_infrastructure_legs_keep_the_summary() {
     assert_eq!(fee.fallback_text(), "0.000015 SOL");
 }
 
-/// The endorsed ceiling sits right after the hoisted rows, beside the priority fee.
+/// The caller's fee cap sits right after the hoisted rows, beside the priority fee.
 #[test]
-fn test_endorsed_max_fee_follows_the_hoisted_priority_fee() {
+fn test_max_fee_follows_the_hoisted_priority_fee() {
     let deposit = instruction_from_fixture(&load_fixture("deposit_usdc"));
     let payer = deposit.accounts[0].pubkey;
     let compute_limit =
@@ -265,8 +265,7 @@ fn test_endorsed_max_fee_follows_the_hoisted_priority_fee() {
     let compute_price =
         solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_price(50_000);
 
-    let payload =
-        payload_with_endorsed_max_fee(&[compute_limit, compute_price, deposit], &payer, 5_105_000);
+    let payload = payload_with_max_fee(&[compute_limit, compute_price, deposit], &payer, 5_105_000);
 
     assert_eq!(payload.title, "Supply USDC to Jupiter Lend");
     let labels = top_level_labels(&payload);

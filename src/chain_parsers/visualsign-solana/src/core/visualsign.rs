@@ -1,4 +1,4 @@
-use crate::core::priority_fee::endorsed_max_fee_field;
+use crate::core::priority_fee::max_fee_field;
 use crate::core::txtypes::{
     create_address_lookup_table_field, decode_v0_instructions, decode_v0_transfers,
 };
@@ -528,14 +528,12 @@ fn build_intermediate_bytes(
     }
 }
 
-/// The wallet-endorsed fee ceiling from `options.metadata`'s Solana branch, if any.
-fn endorsed_max_fee_lamports(options: &VisualSignOptions) -> Option<u64> {
-    let generated::parser::chain_metadata::Metadata::Solana(solana) =
-        options.metadata.as_ref()?.metadata.as_ref()?
-    else {
-        return None;
-    };
-    solana.max_fee_lamports
+/// The Solana branch of `options.metadata`, if the caller supplied one.
+fn solana_metadata(options: &VisualSignOptions) -> Option<&generated::parser::SolanaMetadata> {
+    match options.metadata.as_ref()?.metadata.as_ref()? {
+        generated::parser::chain_metadata::Metadata::Solana(solana) => Some(solana),
+        _ => None,
+    }
 }
 
 /// Pulls `simulated_transaction_result` out of `options.metadata`'s Solana
@@ -550,12 +548,9 @@ fn extract_raw_simulated_instructions(
     Vec<crate::intermediate::SolanaSimulatedInstruction>,
     Option<crate::intermediate::SolanaSimulationError>,
 )> {
-    let generated::parser::chain_metadata::Metadata::Solana(solana) =
-        options.metadata.as_ref()?.metadata.as_ref()?
-    else {
-        return None;
-    };
-    let raw_json_b64 = solana.simulated_transaction_result.as_ref()?;
+    let raw_json_b64 = solana_metadata(options)?
+        .simulated_transaction_result
+        .as_ref()?;
     let raw_json = match base64::engine::general_purpose::STANDARD.decode(raw_json_b64) {
         Ok(raw_json) => raw_json,
         Err(e) => {
@@ -680,7 +675,7 @@ fn convert_to_visual_sign_payload(
         message.account_keys.first(),
         "Solana Transaction",
     )?;
-    insert_endorsed_max_fee(&mut fields, header_end, options)?;
+    insert_max_fee(&mut fields, header_end, options)?;
     Ok(SignablePayload::new(
         0,
         title,
@@ -720,16 +715,15 @@ fn apply_transaction_summary(
     Ok((summary.title, summary.subtitle, header_end))
 }
 
-/// Hoists the wallet-endorsed fee ceiling as a "Max Fee" row right after the header rows,
-/// beside the priority fee the summary hoists, so the approver sees the bound being signed.
-fn insert_endorsed_max_fee(
+/// Adds the caller's fee cap as a "Max Fee" row right after the header rows, beside any
+/// priority fee row the summary hoisted.
+fn insert_max_fee(
     fields: &mut Vec<SignablePayloadField>,
     header_end: usize,
     options: &VisualSignOptions,
 ) -> Result<(), VisualSignError> {
-    if let Some(lamports) = endorsed_max_fee_lamports(options) {
-        let row = endorsed_max_fee_field(lamports)?.signable_payload_field;
-        fields.insert(header_end.min(fields.len()), row);
+    if let Some(lamports) = solana_metadata(options).and_then(|m| m.max_fee_lamports) {
+        fields.insert(header_end, max_fee_field(lamports)?.signable_payload_field);
     }
     Ok(())
 }
@@ -893,7 +887,7 @@ fn convert_v0_to_visual_sign_payload(
         v0_message.account_keys.first(),
         "Solana V0 Transaction",
     )?;
-    insert_endorsed_max_fee(&mut fields, header_end, options)?;
+    insert_max_fee(&mut fields, header_end, options)?;
     Ok(SignablePayload::new(
         0,
         title,
@@ -1362,10 +1356,13 @@ mod tests {
         println!("✅ Contains Jupiter content: {has_jupiter_content}");
     }
 
+    /// A V0 transaction that uses an address lookup table.
+    const V0_TRANSACTION_B64: &str = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAIEMb6evO+2606PWXzaqvJdDGxu+TC0vbg5HymAgNFL11hO9VYqgvLR5aQ58r++KhUxAMArXNUFouJhkNfk91xcdpfsw70khoY/pDZ7PZ6Utif//vUHTgWKYb1IOp28C3laonif5pJDmoFCEZLLM1jDQoBxbAzIjAnxzfida8KF8loqQWTFLbxtR33pCcsa4g/5IpH2dQ+PHkoCbIQgfspGmC7Pda2pnGc3R0WktKvNfpBJorRv4iVoUOTn784IlhxGbzCdMmWMCSVCNq8frVXYTEFUunuZBu0Welvi993TLZB9fJvij+ef7p3Rw8UE+ZQpngRVksq5ZjmYhxu6tmLviIDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAAR51VvyMcBu7nTFbs5oFQf9sbLeo/SOUQKxzaJWvBOPBpuIV/6rgYT7aH9jRhjANdrEOdwa6ztVmKDwAAAAAAEG3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8AqUcn0nz5UKgy0QJ34xepN6SZQQ1LggwZ6QPHCYVaRRN9tD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5ei1w1W367Ykl8/1heeE1Ct6pgMZQ89eFMSv0TWee6UaMMzWwUztGQ+UwdGRAWmsk+hsxTf7GSUoTLwaPEtoWnCSmZVQM4qi8IJmCZXye+3lj/svGc+s43La9Kg4Nwso+h0DCAAJAwQXAQAAAAAACRULAAIECQoJDQkODAUPAwcAAgQGAQsj5RfLl3rjrSoBAAAAMGQAAUBCDwAAAAAAhBlJAAAAAAAyAAALAwQAAAEJAA==";
+
     #[test]
     fn test_v0_transaction() {
         // V0 transaction from the user's request
-        let v0_transaction = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAIEMb6evO+2606PWXzaqvJdDGxu+TC0vbg5HymAgNFL11hO9VYqgvLR5aQ58r++KhUxAMArXNUFouJhkNfk91xcdpfsw70khoY/pDZ7PZ6Utif//vUHTgWKYb1IOp28C3laonif5pJDmoFCEZLLM1jDQoBxbAzIjAnxzfida8KF8loqQWTFLbxtR33pCcsa4g/5IpH2dQ+PHkoCbIQgfspGmC7Pda2pnGc3R0WktKvNfpBJorRv4iVoUOTn784IlhxGbzCdMmWMCSVCNq8frVXYTEFUunuZBu0Welvi993TLZB9fJvij+ef7p3Rw8UE+ZQpngRVksq5ZjmYhxu6tmLviIDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAAR51VvyMcBu7nTFbs5oFQf9sbLeo/SOUQKxzaJWvBOPBpuIV/6rgYT7aH9jRhjANdrEOdwa6ztVmKDwAAAAAAEG3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8AqUcn0nz5UKgy0QJ34xepN6SZQQ1LggwZ6QPHCYVaRRN9tD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5ei1w1W367Ykl8/1heeE1Ct6pgMZQ89eFMSv0TWee6UaMMzWwUztGQ+UwdGRAWmsk+hsxTf7GSUoTLwaPEtoWnCSmZVQM4qi8IJmCZXye+3lj/svGc+s43La9Kg4Nwso+h0DCAAJAwQXAQAAAAAACRULAAIECQoJDQkODAUPAwcAAgQGAQsj5RfLl3rjrSoBAAAAMGQAAUBCDwAAAAAAhBlJAAAAAAAyAAALAwQAAAEJAA==";
+        let v0_transaction = V0_TRANSACTION_B64;
 
         let solana_tx_result = SolanaTransactionWrapper::from_string(v0_transaction);
         assert!(solana_tx_result.is_ok());
@@ -1497,7 +1494,7 @@ mod tests {
     #[test]
     fn test_v0_transfer_decoding() {
         // Test the V0 transfer decoding function directly
-        let v0_transaction = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAIEMb6evO+2606PWXzaqvJdDGxu+TC0vbg5HymAgNFL11hO9VYqgvLR5aQ58r++KhUxAMArXNUFouJhkNfk91xcdpfsw70khoY/pDZ7PZ6Utif//vUHTgWKYb1IOp28C3laonif5pJDmoFCEZLLM1jDQoBxbAzIjAnxzfida8KF8loqQWTFLbxtR33pCcsa4g/5IpH2dQ+PHkoCbIQgfspGmC7Pda2pnGc3R0WktKvNfpBJorRv4iVoUOTn784IlhxGbzCdMmWMCSVCNq8frVXYTEFUunuZBu0Welvi993TLZB9fJvij+ef7p3Rw8UE+ZQpngRVksq5ZjmYhxu6tmLviIDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAAR51VvyMcBu7nTFbs5oFQf9sbLeo/SOUQKxzaJWvBOPBpuIV/6rgYT7aH9jRhjANdrEOdwa6ztVmKDwAAAAAAEG3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8AqUcn0nz5UKgy0QJ34xepN6SZQQ1LggwZ6QPHCYVaRRN9tD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5ei1w1W367Ykl8/1heeE1Ct6pgMZQ89eFMSv0TWee6UaMMzWwUztGQ+UwdGRAWmsk+hsxTf7GSUoTLwaPEtoWnCSmZVQM4qi8IJmCZXye+3lj/svGc+s43La9Kg4Nwso+h0DCAAJAwQXAQAAAAAACRULAAIECQoJDQkODAUPAwcAAgQGAQsj5RfLl3rjrSoBAAAAMGQAAUBCDwAAAAAAhBlJAAAAAAAyAAALAwQAAAEJAA==";
+        let v0_transaction = V0_TRANSACTION_B64;
 
         let solana_tx_result = SolanaTransactionWrapper::from_string(v0_transaction);
         assert!(solana_tx_result.is_ok());
@@ -1778,7 +1775,7 @@ mod tests {
     #[test]
     fn test_transaction_auto_detection_v0_vs_legacy() {
         // Test the auto-detection logic in from_string() - V0 should be detected first
-        let v0_transaction = "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAIEMb6evO+2606PWXzaqvJdDGxu+TC0vbg5HymAgNFL11hO9VYqgvLR5aQ58r++KhUxAMArXNUFouJhkNfk91xcdpfsw70khoY/pDZ7PZ6Utif//vUHTgWKYb1IOp28C3laonif5pJDmoFCEZLLM1jDQoBxbAzIjAnxzfida8KF8loqQWTFLbxtR33pCcsa4g/5IpH2dQ+PHkoCbIQgfspGmC7Pda2pnGc3R0WktKvNfpBJorRv4iVoUOTn784IlhxGbzCdMmWMCSVCNq8frVXYTEFUunuZBu0Welvi993TLZB9fJvij+ef7p3Rw8UE+ZQpngRVksq5ZjmYhxu6tmLviIDBkZv5SEXMv/srbpyw5vnvIzlu8X3EmssQ5s6QAAAAAR51VvyMcBu7nTFbs5oFQf9sbLeo/SOUQKxzaJWvBOPBpuIV/6rgYT7aH9jRhjANdrEOdwa6ztVmKDwAAAAAAEG3fbh12Whk9nL4UbO63msHLSF7V9bN5E6jPWFfv8AqUcn0nz5UKgy0QJ34xepN6SZQQ1LggwZ6QPHCYVaRRN9tD/6J/XX9kp0wJsfKVh53ksJqzbfyd1RSzIap7OM5ei1w1W367Ykl8/1heeE1Ct6pgMZQ89eFMSv0TWee6UaMMzWwUztGQ+UwdGRAWmsk+hsxTf7GSUoTLwaPEtoWnCSmZVQM4qi8IJmCZXye+3lj/svGc+s43La9Kg4Nwso+h0DCAAJAwQXAQAAAAAACRULAAIECQoJDQkODAUPAwcAAgQGAQsj5RfLl3rjrSoBAAAAMGQAAUBCDwAAAAAAhBlJAAAAAAAyAAALAwQAAAEJAA==";
+        let v0_transaction = V0_TRANSACTION_B64;
 
         // Test that V0 is detected correctly
         let v0_wrapper = SolanaTransactionWrapper::from_string(v0_transaction).unwrap();
@@ -2847,7 +2844,7 @@ mod tests {
     }
 
     #[test]
-    fn endorsed_max_fee_row_follows_the_hoisted_rows() {
+    fn max_fee_row_follows_the_hoisted_rows() {
         let payer = Pubkey::new_unique();
         let mut fields = vec![network_row(), network_row()];
         let (_, _, header_end) = apply_transaction_summary(
@@ -2858,7 +2855,7 @@ mod tests {
             "Default",
         )
         .expect("apply");
-        insert_endorsed_max_fee(
+        insert_max_fee(
             &mut fields,
             header_end,
             &options_with_max_fee(Some(5_105_000)),
@@ -2870,26 +2867,25 @@ mod tests {
     }
 
     #[test]
-    fn endorsed_max_fee_row_follows_network_without_a_summary() {
+    fn max_fee_row_follows_network_without_a_summary() {
         let mut fields = vec![network_row(), network_row()];
-        insert_endorsed_max_fee(&mut fields, 1, &options_with_max_fee(Some(5_000)))
-            .expect("insert");
+        insert_max_fee(&mut fields, 1, &options_with_max_fee(Some(5_000))).expect("insert");
         let labels: Vec<&str> = fields.iter().map(|f| f.label().as_str()).collect();
         assert_eq!(labels, ["Network", "Max Fee", "Network"]);
     }
 
     #[test]
-    fn no_endorsed_max_fee_means_no_row() {
+    fn no_max_fee_means_no_row() {
         let mut fields = vec![network_row()];
-        insert_endorsed_max_fee(&mut fields, 1, &options_with_max_fee(None)).expect("insert");
-        insert_endorsed_max_fee(&mut fields, 1, &VisualSignOptions::default()).expect("insert");
+        insert_max_fee(&mut fields, 1, &options_with_max_fee(None)).expect("insert");
+        insert_max_fee(&mut fields, 1, &VisualSignOptions::default()).expect("insert");
         assert_eq!(fields.len(), 1);
     }
 
     /// End to end: the row is rendered from caller metadata on a transaction whose
     /// transfer blocks any summary, so it lands right after Network.
     #[test]
-    fn endorsed_max_fee_is_rendered_from_chain_metadata() {
+    fn max_fee_is_rendered_from_chain_metadata() {
         let solana_transfer_message = "AgABA3Lgs31rdjnEG5FRyrm2uAi4f+erGdyJl0UtJyMMLGzC9wF+t3qhmhpj3vI369n5Ef5xRLms/Vn8J/Lc7bmoIkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMBafBISARibJ+I25KpHkjLe53ZrqQcLWGy8n97yWD7mAQICAQAMAgAAAADKmjsAAAAA";
         let transaction = create_transaction_with_empty_signatures(solana_transfer_message);
         let wrapper = SolanaTransactionWrapper::from_string(&transaction).expect("parses");
@@ -2908,5 +2904,20 @@ mod tests {
             .expect("converts")
             .payload;
         assert!(without.fields.iter().all(|f| f.label() != "Max Fee"));
+    }
+
+    /// The V0 converter places the row the same way as the legacy one.
+    #[test]
+    fn max_fee_is_rendered_for_v0_transactions() {
+        let wrapper = SolanaTransactionWrapper::from_string(V0_TRANSACTION_B64).expect("parses");
+        assert_eq!(wrapper.transaction_type(), "Solana (V0)");
+        let payload = SolanaVisualSignConverter
+            .to_visual_sign_payload(wrapper, options_with_max_fee(Some(5_105_000)))
+            .expect("converts")
+            .payload;
+        payload.validate_charset().expect("ASCII only");
+        let labels: Vec<&str> = payload.fields.iter().map(|f| f.label().as_str()).collect();
+        assert_eq!(&labels[..2], ["Network", "Max Fee"], "layout: {labels:?}");
+        assert_eq!(payload.fields[1].fallback_text(), "0.005105 SOL");
     }
 }
