@@ -8,7 +8,7 @@
 //!   outputs are refused.
 //! - Memos are recovered from each output's own note fields (the sender-side
 //!   ephemeral secret is derived from `rseed`), so no viewing key is needed.
-//!   An output whose memo does not decrypt this way is marked as such.
+//!   Nonzero outputs that do not recover are refused to avoid undetectable notes.
 //! - Per pool, the value spent is the committed value balance plus the
 //!   (commitment-checked) outputs. If the PCZT states spend values, they must
 //!   add up to the same total.
@@ -16,8 +16,8 @@
 //!   contain the output's receiver.
 //! - The fee is transparent in minus transparent out plus the shielded value
 //!   balances, compared with the ZIP-317 conventional fee. Transparent input
-//!   amounts are committed by the transparent signatures (ZIP 244), not by the
-//!   shielded sighash.
+//!   amounts are committed by the ZIP-244 sighashes. Transparent signers must
+//!   use their per-input digest, not the shielded digest.
 //! - Zero-value outputs whose memo is empty or does not decrypt are padding
 //!   (ZIP 326 same-address outputs carry random ciphertexts) and are counted,
 //!   not listed.
@@ -28,8 +28,9 @@
 //! including any change, is listed. Ironwood (NU6.3) bundles get the same
 //! handling as Orchard.
 //!
-//! The ZIP-244 shielded sighash is returned as a field so a wallet can bind its
-//! signature to the rendered payload.
+//! Shielded and per-transparent-input ZIP-244 sighashes are returned so a
+//! wallet can bind its signatures to the rendered payload. Only SIGHASH_ALL
+//! transparent inputs are accepted. The declared network is unsigned metadata.
 
 #[cfg(feature = "cli-plugin")]
 pub mod cli_plugin;
@@ -217,7 +218,7 @@ fn memo_view(bytes: Option<&[u8; 512]>) -> MemoView {
 }
 
 struct Send {
-    to: String,
+    to: CheckedAddress,
     kind: String,
     value: u64,
     memo: MemoView,
@@ -227,7 +228,7 @@ struct Send {
 struct Analysis {
     sends: Vec<Send>,
     spent: Vec<(Pool, u64)>,
-    t_inputs: Vec<(String, u64, Option<String>)>,
+    t_inputs: Vec<(String, u64)>,
     t_in: u64,
     t_out: u64,
     /// `None` once any input's size is unknown (non-P2PKH).
@@ -256,14 +257,21 @@ fn add(total: &mut u64, v: u64) -> Result<(), VisualSignError> {
     Ok(())
 }
 
+struct CheckedAddress {
+    text: String,
+    expiry_time: Option<u64>,
+    tex: bool,
+}
+
 /// Check a `user_address` against the output's receiver and return the text
 /// to display.
 fn check_user_address(
     net: &Network,
+    tx_expiry: u32,
     user: &Option<String>,
     matches: impl Fn(&Address) -> bool,
     fallback: impl FnOnce() -> Option<String>,
-) -> Result<String, VisualSignError> {
+) -> Result<CheckedAddress, VisualSignError> {
     match user {
         Some(s) => {
             let addr = Address::decode(net, s).ok_or_else(|| {
@@ -276,9 +284,31 @@ fn check_user_address(
                     "user address {s} does not contain the output's receiver"
                 )));
             }
-            Ok(s.clone())
+            let expiry_time = if let Address::Unified(ua) = &addr {
+                if ua
+                    .expiry_height()
+                    .is_some_and(|h| tx_expiry == 0 || tx_expiry > u32::from(h))
+                {
+                    return Err(VisualSignError::ValidationError(
+                        "transaction expiry exceeds user address expiry height (or is unlimited)"
+                            .into(),
+                    ));
+                }
+                ua.expiry_time()
+            } else {
+                None
+            };
+            Ok(CheckedAddress {
+                text: s.clone(),
+                expiry_time,
+                tex: matches!(addr, Address::Tex(_)),
+            })
         }
-        None => fallback().ok_or_else(|| malformed("cannot encode receiver")),
+        None => Ok(CheckedAddress {
+            text: fallback().ok_or_else(|| malformed("cannot encode receiver"))?,
+            expiry_time: None,
+            tex: false,
+        }),
     }
 }
 
@@ -318,6 +348,7 @@ fn orchard_memo(pool: Pool, action: &orchard::pczt::Action) -> Option<[u8; 512]>
 fn analyze_orchard(
     pool: Pool,
     net: &Network,
+    expiry: u32,
     bundle: &orchard::pczt::Bundle,
     a: &mut Analysis,
 ) -> Result<(), VisualSignError> {
@@ -352,11 +383,18 @@ fn analyze_orchard(
 
         let shown = check_user_address(
             net,
+            expiry,
             out.user_address(),
             |addr| matches!(addr, Address::Unified(ua) if ua.orchard() == Some(&recipient)),
             || orchard_ua(net, recipient),
         )?;
-        let memo = memo_view(orchard_memo(pool, action).as_ref());
+        let recovered = orchard_memo(pool, action);
+        if value > 0 && recovered.is_none() {
+            return Err(malformed(format!(
+                "{p} action {i}: nonzero output does not recover from its note fields"
+            )));
+        }
+        let memo = memo_view(recovered.as_ref());
         if value == 0 && matches!(memo, MemoView::Empty | MemoView::Unreadable) {
             a.dummies += 1;
             continue;
@@ -400,6 +438,7 @@ impl ShieldedOutput<sapling_crypto::note_encryption::SaplingDomain> for SaplingO
 
 fn analyze_sapling(
     net: &Network,
+    expiry: u32,
     bundle: &sapling_crypto::pczt::Bundle,
     a: &mut Analysis,
 ) -> Result<(), VisualSignError> {
@@ -432,6 +471,7 @@ fn analyze_sapling(
         outputs += i128::from(value);
         let shown = check_user_address(
             net,
+            expiry,
             out.user_address(),
             |addr| match addr {
                 Address::Sapling(pa) => **pa == recipient,
@@ -459,6 +499,11 @@ fn analyze_sapling(
             )
             .map(|(_, _, m)| m)
         });
+        if value > 0 && memo.is_none() {
+            return Err(malformed(format!(
+                "Sapling output {i}: nonzero output does not recover from its note fields"
+            )));
+        }
         let memo = memo_view(memo.as_ref());
         if value == 0 && matches!(memo, MemoView::Empty | MemoView::Unreadable) {
             a.dummies += 1;
@@ -485,6 +530,7 @@ fn compact_size_len(n: usize) -> usize {
 
 fn analyze_transparent(
     net: &Network,
+    expiry: u32,
     bundle: &zcash_transparent::pczt::Bundle,
     a: &mut Analysis,
 ) -> Result<(), VisualSignError> {
@@ -514,10 +560,7 @@ fn analyze_transparent(
             // known, so the ZIP-317 conventional fee cannot be computed.
             _ => a.t_input_sizes = None,
         }
-        let sighash = input.sighash_type().encode();
-        let note = (sighash != zcash_transparent::sighash::SIGHASH_ALL)
-            .then(|| format!("sighash type 0x{sighash:02x}, not ALL"));
-        a.t_inputs.push((shown, value, note));
+        a.t_inputs.push((shown, value));
     }
     for out in bundle.outputs() {
         let value = u64::from(*out.value());
@@ -531,6 +574,7 @@ fn analyze_transparent(
             Some(t) => {
                 let shown = check_user_address(
                     net,
+                    expiry,
                     out.user_address(),
                     |u| match u {
                         Address::Transparent(x) => *x == t,
@@ -547,7 +591,11 @@ fn analyze_transparent(
                 (shown, kind.to_string())
             }
             None => (
-                format!("script 0x{}", hex(&script.to_bytes())),
+                CheckedAddress {
+                    text: format!("script 0x{}", hex(&script.to_bytes())),
+                    expiry_time: None,
+                    tex: false,
+                },
                 "non-standard transparent script".to_string(),
             ),
         };
@@ -602,9 +650,18 @@ fn decode(pczt: Pczt) -> Result<Vec<AnnotatedPayloadField>, VisualSignError> {
         .map_err(|_| malformed("unknown consensus branch"))?;
     let expiry = *g.expiry_height();
 
-    let sighash = pczt::roles::signer::Signer::new(pczt.clone())
-        .map_err(|e| malformed(format!("cannot compute sighash: {e:?}")))?
-        .shielded_sighash();
+    let signer = pczt::roles::signer::Signer::new(pczt.clone())
+        .map_err(|e| malformed(format!("cannot compute sighash: {e:?}")))?;
+    // The default ALL_ONLY policy refuses NONE, SINGLE and ANYONECANPAY.
+    // Compute every transparent digest before rendering any destinations.
+    let transparent_sighashes = (0..pczt.transparent().inputs().len())
+        .map(|i| {
+            signer
+                .transparent_sighash(i)
+                .map_err(|e| malformed(format!("transparent input {} sighash: {e:?}", i + 1)))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let sighash = signer.shielded_sighash();
     let effects = pczt
         .clone()
         .into_effects()
@@ -613,18 +670,18 @@ fn decode(pczt: Pczt) -> Result<Vec<AnnotatedPayloadField>, VisualSignError> {
     let mut a = Analysis::default();
     let v = Verifier::new(pczt)
         .with_orchard(|b| {
-            analyze_orchard(Pool::Orchard, &net, b, &mut a).map_err(OrchardError::Custom)
+            analyze_orchard(Pool::Orchard, &net, expiry, b, &mut a).map_err(OrchardError::Custom)
         })
         .map_err(orchard_err)?
         .with_ironwood(|b| {
-            analyze_orchard(Pool::Ironwood, &net, b, &mut a).map_err(OrchardError::Custom)
+            analyze_orchard(Pool::Ironwood, &net, expiry, b, &mut a).map_err(OrchardError::Custom)
         })
         .map_err(orchard_err)?
-        .with_sapling(|b| analyze_sapling(&net, b, &mut a).map_err(SaplingError::Custom))
+        .with_sapling(|b| analyze_sapling(&net, expiry, b, &mut a).map_err(SaplingError::Custom))
         .map_err(sapling_err)?;
     let _ = v
         .with_transparent(|b| {
-            analyze_transparent(&net, b, &mut a).map_err(TransparentError::Custom)
+            analyze_transparent(&net, expiry, b, &mut a).map_err(TransparentError::Custom)
         })
         .map_err(transparent_err)?;
 
@@ -660,6 +717,12 @@ fn decode(pczt: Pczt) -> Result<Vec<AnnotatedPayloadField>, VisualSignError> {
             a.spent.push((pool, spent));
         }
     }
+    if !a.spent.is_empty() && a.sends.iter().any(|s| s.to.tex) {
+        return Err(VisualSignError::ValidationError(
+            "TEX recipients require transparent-only sources; transaction spends shielded funds"
+                .into(),
+        ));
+    }
     let fee = i128::from(a.t_in) - i128::from(a.t_out) + shielded_balance;
     let fee = u64::try_from(fee).map_err(|_| malformed("outputs exceed inputs"))?;
 
@@ -683,17 +746,21 @@ fn decode(pczt: Pczt) -> Result<Vec<AnnotatedPayloadField>, VisualSignError> {
     };
 
     let mut fields = vec![create_text_field(
-        "Network",
+        "Declared network (unsigned)",
         match net {
             Network::MainNetwork => "Zcash mainnet",
             Network::TestNetwork => "Zcash testnet",
         },
     )?];
+    fields.push(create_text_field(
+        "Network trust",
+        "PCZT coin type and address prefixes are unsigned; confirm the network independently",
+    )?);
     for (n, s) in a.sends.iter().enumerate() {
         let n = n + 1;
         fields.push(create_address_field(
             &format!("Output {n}"),
-            &s.to,
+            &s.to.text,
             None,
             None,
             None,
@@ -704,6 +771,12 @@ fn decode(pczt: Pczt) -> Result<Vec<AnnotatedPayloadField>, VisualSignError> {
             &zec(s.value),
             ZEC,
         )?);
+        if let Some(time) = s.to.expiry_time {
+            fields.push(create_text_field(
+                &format!("Output {n} address expiry time"),
+                &format!("{time} Unix seconds; not checked (parser has no clock)"),
+            )?);
+        }
         let memo = match &s.memo {
             MemoView::Empty => None,
             MemoView::Text(t) => Some(t.clone()),
@@ -724,14 +797,17 @@ fn decode(pczt: Pczt) -> Result<Vec<AnnotatedPayloadField>, VisualSignError> {
             &format!("{} ZEC; spend ownership {UNVERIFIED}", zec(*v)),
         )?);
     }
-    for (i, (addr, value, note)) in a.t_inputs.iter().enumerate() {
-        let mut text = format!("{addr} {} ZEC", zec(*value));
-        if let Some(note) = note {
-            text.push_str(&format!(" ({note})"));
-        }
+    for (i, (addr, value)) in a.t_inputs.iter().enumerate() {
+        let text = format!("{addr} {} ZEC", zec(*value));
         fields.push(create_text_field(
             &format!("Transparent input {}", i + 1),
             &text,
+        )?);
+    }
+    for (i, digest) in transparent_sighashes.iter().enumerate() {
+        fields.push(create_text_field(
+            &format!("Transparent input {} sighash (ZIP-244)", i + 1),
+            &hex(digest),
         )?);
     }
     fields.push(create_amount_field("Fee", &zec(fee), ZEC)?);

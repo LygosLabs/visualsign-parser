@@ -4,7 +4,8 @@ use visualsign::registry::{Chain, TransactionConverterRegistry};
 
 /// CLI arguments specific to Zcash.
 ///
-/// None are needed: the network comes from the PCZT's coin type.
+/// The PCZT's coin type is displayed as a declared, unsigned network.
+/// This plugin does not provide a caller network pin.
 #[derive(ClapArgs, Debug, Default, Clone)]
 pub struct ZcashArgs {}
 

@@ -3,10 +3,19 @@ SignablePayload {
         TextV2 {
             common: SignablePayloadFieldCommon {
                 fallback_text: "Zcash mainnet",
-                label: "Network",
+                label: "Declared network (unsigned)",
             },
             text_v2: SignablePayloadFieldTextV2 {
                 text: "Zcash mainnet",
+            },
+        },
+        TextV2 {
+            common: SignablePayloadFieldCommon {
+                fallback_text: "PCZT coin type and address prefixes are unsigned; confirm the network independently",
+                label: "Network trust",
+            },
+            text_v2: SignablePayloadFieldTextV2 {
+                text: "PCZT coin type and address prefixes are unsigned; confirm the network independently",
             },
         },
         AddressV2 {

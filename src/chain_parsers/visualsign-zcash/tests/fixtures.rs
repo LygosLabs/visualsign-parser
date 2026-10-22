@@ -7,6 +7,7 @@
 #[path = "support/builder.rs"]
 mod builder;
 
+use base64::Engine as _;
 use std::fs;
 use std::path::PathBuf;
 use visualsign::SignablePayload;
@@ -142,7 +143,9 @@ fn golden() {
 }
 
 #[test]
-fn sighash_field_is_the_zip244_shielded_sighash_of_the_bytes() {
+// Integration mapping check only; independent raw-transaction known-answer
+// coverage is in zip244_vectors.rs and ironwood_v6_vectors.rs.
+fn sighash_field_maps_to_the_pczt_signer_digest() {
     for name in FIXTURES {
         let p = parse(&input(name)).unwrap();
         assert_eq!(
@@ -159,7 +162,7 @@ fn orchard_send_shows_recipients_memos_fee_and_unverified_change() {
     let p = parse(&input("orchard_send_v5")).unwrap();
     assert_eq!(p.title, "Zcash Transaction");
     assert_eq!(p.payload_type, "ZcashTx");
-    assert_eq!(text(&p, "Network"), "Zcash mainnet");
+    assert_eq!(text(&p, "Declared network (unsigned)"), "Zcash mainnet");
 
     // Without a viewing key every output is listed, change included; the
     // builder shuffles actions, so compare as a set.
@@ -310,7 +313,7 @@ fn keystone_firmware_vector_parses() {
     let b = bytes("keystone_v1_orchard_to_transparent");
     assert_eq!(&b[4..8], &1u32.to_le_bytes());
     let p = parse_bytes(&b).unwrap();
-    assert_eq!(text(&p, "Network"), "Zcash mainnet");
+    assert_eq!(text(&p, "Declared network (unsigned)"), "Zcash mainnet");
     assert!(has(&p, "Transparent input 1") || has(&p, "Orchard spent"));
     assert!(has(&p, "Output 1"));
 }
@@ -434,7 +437,6 @@ fn malformed_input_is_refused() {
 
 #[test]
 fn base64_and_0x_hex_inputs_are_accepted() {
-    use base64::Engine as _;
     let b = bytes("sapling_send_v5");
     let want = sighash(&b);
     for s in [
@@ -446,4 +448,211 @@ fn base64_and_0x_hex_inputs_are_accepted() {
             want
         );
     }
+}
+
+// Mutate the public v2 serialization model, leaving note commitments and
+// transaction structure intact. Derivation maps are irrelevant to these cases
+// and their byte-array keys cannot be represented as JSON object keys.
+fn edit_pczt(b: &[u8], edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+    let pczt = pczt::roles::redactor::Redactor::new(pczt::Pczt::parse(b).unwrap())
+        .redact_transparent_with(|mut r| {
+            r.redact_inputs(|mut i| i.clear_bip32_derivation());
+            r.redact_outputs(|mut o| o.clear_bip32_derivation());
+        })
+        .finish();
+    let mut value = serde_json::to_value(pczt::v2::Pczt::try_from(pczt).unwrap()).unwrap();
+    edit(&mut value);
+    serde_json::from_value::<pczt::v2::Pczt>(value)
+        .unwrap()
+        .serialize()
+}
+
+#[test]
+fn review_rejects_non_all_transparent_sighashes() {
+    for sighash_type in [2u8, 3, 0x81, 0x82, 0x83] {
+        let b = edit_pczt(&bytes("transparent_mix_v5"), |v| {
+            v["transparent"]["inputs"][0]["sighash_type"] = sighash_type.into();
+        });
+        let err = parse_bytes(&b).unwrap_err();
+        assert!(err.to_string().contains("sighash"), "{err}");
+    }
+}
+
+#[test]
+fn review_transparent_input_digest_commits_to_its_amount() {
+    let b = bytes("transparent_mix_v5");
+    let changed = edit_pczt(&b, |v| {
+        v["transparent"]["inputs"][0]["value"] = 2_000_001u64.into();
+    });
+    let original = parse_bytes(&b).unwrap();
+    let changed = parse_bytes(&changed).unwrap();
+    // ZIP 244 also commits the shielded digest to all transparent amounts.
+    assert_ne!(
+        text(&original, "Shielded sighash (ZIP-244)"),
+        text(&changed, "Shielded sighash (ZIP-244)")
+    );
+    assert_ne!(
+        text(&original, "Transparent input 1 sighash (ZIP-244)"),
+        text(&changed, "Transparent input 1 sighash (ZIP-244)")
+    );
+}
+
+#[test]
+fn review_declared_network_is_explicitly_unsigned() {
+    let b = bytes("orchard_send_v5");
+    let changed = edit_pczt(&b, |v| {
+        v["global"]["coin_type"] = 1.into();
+    });
+    let original = parse_bytes(&b).unwrap();
+    let changed = parse_bytes(&changed).unwrap();
+    assert_eq!(
+        text(&original, "Shielded sighash (ZIP-244)"),
+        text(&changed, "Shielded sighash (ZIP-244)")
+    );
+    assert_eq!(
+        text(&original, "Declared network (unsigned)"),
+        "Zcash mainnet"
+    );
+    assert_eq!(
+        text(&changed, "Declared network (unsigned)"),
+        "Zcash testnet"
+    );
+    assert!(text(&changed, "Network trust").contains("address prefixes"));
+}
+
+#[test]
+fn review_nonzero_shielded_outputs_must_recover() {
+    for (fixture, pool) in [
+        ("orchard_send_v5", "orchard"),
+        ("ironwood_send_v6", "ironwood"),
+        ("sapling_send_v5", "sapling"),
+    ] {
+        let b = edit_pczt(&bytes(fixture), |v| {
+            let output = if pool == "sapling" {
+                v[pool]["outputs"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|o| o["value"].as_u64().unwrap_or(0) > 0)
+                    .unwrap()
+            } else {
+                &mut v[pool]["actions"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|a| a["output"]["value"].as_u64().unwrap_or(0) > 0)
+                    .unwrap()["output"]
+            };
+            output["enc_ciphertext"] = if pool == "sapling" {
+                serde_json::json!(vec![0u8; 580])
+            } else {
+                serde_json::json!({"Encrypted": vec![0u8; 580]})
+            };
+        });
+        let err = parse_bytes(&b).unwrap_err();
+        assert!(err.to_string().contains("recover"), "{fixture}: {err}");
+    }
+}
+
+#[test]
+fn review_ua_expiry_height_is_enforced_and_time_is_visible() {
+    let b = bytes("orchard_send_v5");
+    let expiry = *pczt::Pczt::parse(&b).unwrap().global().expiry_height();
+    for (tx_expiry, ua_expiry, accepted) in [
+        (expiry, expiry - 1, false),
+        (0, expiry, false),
+        (expiry, expiry, true),
+        (expiry, expiry + 1, true),
+    ] {
+        let addr = UnifiedAddress::from_receivers(
+            Some(builder::foreign_orchard_address()),
+            None,
+            None,
+            Some(zcash_protocol::consensus::BlockHeight::from_u32(ua_expiry)),
+            Some(1_900_000_000),
+        )
+        .unwrap()
+        .encode(&builder::MAIN);
+        let edited = edit_pczt(&b, |v| {
+            v["global"]["expiry_height"] = tx_expiry.into();
+            for a in v["orchard"]["actions"].as_array_mut().unwrap() {
+                if a["output"]["value"] == 100_000u64 {
+                    a["output"]["user_address"] = addr.clone().into();
+                }
+            }
+        });
+        let result = parse_bytes(&edited);
+        if accepted {
+            let p = result.unwrap();
+            let n = (1..=3)
+                .find(|n| text(&p, &format!("Output {n}")) == addr)
+                .unwrap();
+            assert_eq!(
+                text(&p, &format!("Output {n} address expiry time")),
+                "1900000000 Unix seconds; not checked (parser has no clock)"
+            );
+        } else {
+            assert!(result.unwrap_err().to_string().contains("expiry"));
+        }
+    }
+}
+
+#[test]
+fn review_tex_requires_transparent_only_sources() {
+    let shielded = builder::build(&builder::Spec {
+        height: builder::PRE_NU6_3,
+        orchard_in: Some(1_000_000),
+        transparent_out: vec![100_000],
+        change: Some(builder::ChangePool::Orchard),
+        ..Default::default()
+    });
+    let transparent = bytes("transparent_mix_v5");
+    let tex = zcash_keys::address::Address::Tex([0x42; 20]).encode(&builder::MAIN);
+    for (b, accepted) in [(shielded, false), (transparent, true)] {
+        let edited = edit_pczt(&b, |v| {
+            v["transparent"]["outputs"][0]["user_address"] = tex.clone().into();
+        });
+        let result = parse_bytes(&edited);
+        if accepted {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            assert!(result.unwrap_err().to_string().contains("TEX"));
+        }
+    }
+}
+
+#[test]
+fn review_transparent_only_transaction_has_a_distinct_digest_for_each_input() {
+    let b = builder::build(&builder::Spec {
+        height: builder::PRE_NU6_3,
+        transparent_in: Some(2_000_000),
+        transparent_out: vec![100_000],
+        change: Some(builder::ChangePool::Transparent),
+        ..Default::default()
+    });
+    let b = edit_pczt(&b, |v| {
+        let inputs = v["transparent"]["inputs"].as_array_mut().unwrap();
+        let mut second = inputs[0].clone();
+        second["prevout_index"] = 1.into();
+        inputs.push(second);
+    });
+    let p = parse_bytes(&b).unwrap();
+    let signer = pczt::roles::signer::Signer::new(pczt::Pczt::parse(&b).unwrap()).unwrap();
+    for i in 0..2 {
+        assert_eq!(
+            text(
+                &p,
+                &format!("Transparent input {} sighash (ZIP-244)", i + 1)
+            ),
+            hex::encode(signer.transparent_sighash(i).unwrap())
+        );
+    }
+    assert_ne!(
+        text(&p, "Transparent input 1 sighash (ZIP-244)"),
+        text(&p, "Transparent input 2 sighash (ZIP-244)")
+    );
+    assert_ne!(
+        text(&p, "Transparent input 1 sighash (ZIP-244)"),
+        text(&p, "Shielded sighash (ZIP-244)")
+    );
 }
