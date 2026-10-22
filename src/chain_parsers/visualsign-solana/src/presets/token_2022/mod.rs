@@ -1057,7 +1057,8 @@ mod tests {
         let idl = crate::idl::IdlRegistry::new();
         let context = VisualizerContext::new(&sender, &compiled, &keys, &idl, 0);
         let field = Token2022Visualizer.visualize_tx_commands(&context).unwrap();
-        let SignablePayloadField::PreviewLayout { preview_layout, .. } = field.signable_payload_field
+        let SignablePayloadField::PreviewLayout { preview_layout, .. } =
+            field.signable_payload_field
         else {
             panic!("expected PreviewLayout");
         };
@@ -1107,7 +1108,10 @@ mod tests {
         let (title, rows) = visualize(data, &k);
         assert_eq!(title, "Transfer Checked With Fee: 2 tokens");
         assert!(rows.contains(&"Fee: 0.01".to_string()), "{rows:#?}");
-        assert!(rows.contains(&format!("Destination: {}", k[2])), "{rows:#?}");
+        assert!(
+            rows.contains(&format!("Destination: {}", k[2])),
+            "{rows:#?}"
+        );
     }
 
     #[test]
@@ -1136,9 +1140,18 @@ mod tests {
         data.extend_from_slice(&42u64.to_le_bytes());
         let (title, rows) = visualize(data, &k);
         assert_eq!(title, "Transfer: 42 base units");
-        assert!(rows.contains(&format!("Destination: {}", k[1])), "{rows:#?}");
-        assert!(rows.contains(&format!("Multisig Signer 1: {}", k[3])), "{rows:#?}");
-        assert!(rows.contains(&format!("Multisig Signer 2: {}", k[4])), "{rows:#?}");
+        assert!(
+            rows.contains(&format!("Destination: {}", k[1])),
+            "{rows:#?}"
+        );
+        assert!(
+            rows.contains(&format!("Multisig Signer 1: {}", k[3])),
+            "{rows:#?}"
+        );
+        assert!(
+            rows.contains(&format!("Multisig Signer 2: {}", k[4])),
+            "{rows:#?}"
+        );
     }
 
     #[test]
