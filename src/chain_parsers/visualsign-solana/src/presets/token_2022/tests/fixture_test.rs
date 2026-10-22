@@ -10,9 +10,9 @@
 
 use super::*;
 use crate::core::VisualizerContext;
-use solana_parser::solana::structs::SolanaAccount;
 use solana_instruction::AccountMeta;
 use solana_instruction::Instruction;
+use solana_parser::solana::structs::SolanaAccount;
 use solana_pubkey::Pubkey;
 use std::str::FromStr;
 use visualsign::SignablePayloadField;

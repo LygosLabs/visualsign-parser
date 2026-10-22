@@ -5,7 +5,8 @@
 use solana_pubkey::Pubkey;
 
 /// Associated Token Account program id.
-pub(crate) const ID: Pubkey = Pubkey::from_str_const("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+pub(crate) const ID: Pubkey =
+    Pubkey::from_str_const("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 /// Instructions of the Associated Token Account program. The discriminator is
 /// the variant index; empty data means `Create`.
@@ -24,7 +25,11 @@ pub(crate) fn get_associated_token_address_with_program_id(
     token_program: &Pubkey,
 ) -> Pubkey {
     Pubkey::find_program_address(
-        &[&wallet.to_bytes(), &token_program.to_bytes(), &mint.to_bytes()],
+        &[
+            &wallet.to_bytes(),
+            &token_program.to_bytes(),
+            &mint.to_bytes(),
+        ],
         &ID,
     )
     .0

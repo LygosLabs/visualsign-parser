@@ -573,7 +573,10 @@ fn extract_raw_simulated_instructions(
 
 impl VisualSignConverterFromString<SolanaTransactionWrapper> for SolanaVisualSignConverter {}
 
-/// Public API function for ease of use with legacy transactions
+/// Public API function for ease of use with legacy transactions.
+///
+/// Takes `solana-transaction` 6 types. Callers using `solana-sdk` 2.x must
+/// migrate their transaction types or use [`transaction_string_to_visual_sign`].
 pub fn transaction_to_visual_sign(
     transaction: SolanaTransaction,
     options: VisualSignOptions,
@@ -583,7 +586,10 @@ pub fn transaction_to_visual_sign(
         .map(|r| r.payload)
 }
 
-/// Public API function for versioned transactions
+/// Public API function for versioned transactions.
+///
+/// Takes `solana-transaction` 6 types. Callers using `solana-sdk` 2.x must
+/// migrate their transaction types or use [`transaction_string_to_visual_sign`].
 pub fn versioned_transaction_to_visual_sign(
     transaction: VersionedTransaction,
     options: VisualSignOptions,

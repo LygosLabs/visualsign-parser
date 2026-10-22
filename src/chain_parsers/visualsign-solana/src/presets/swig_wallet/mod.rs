@@ -9,10 +9,10 @@ use crate::core::{
     VisualizerKind, available_visualizers, resolve_program_display, visualize_with_any,
 };
 use config::SwigWalletConfig;
-use solana_parser::solana::structs::SolanaAccount;
-use solana_system_interface::instruction::SystemInstruction;
 use solana_instruction::{AccountMeta, Instruction};
+use solana_parser::solana::structs::SolanaAccount;
 use solana_pubkey::Pubkey;
+use solana_system_interface::instruction::SystemInstruction;
 use solana_system_interface::program as system_program;
 use spl_token_interface::instruction::{AuthorityType as SplAuthorityType, TokenInstruction};
 use std::convert::TryInto;
@@ -2736,8 +2736,8 @@ mod tests {
     fn test_deeply_nested_sign_v1_does_not_stack_overflow() {
         use crate::core::{InstructionVisualizer, VisualizerContext};
         use crate::idl::IdlRegistry;
-        use solana_parser::solana::structs::SolanaAccount;
         use solana_message::compiled_instruction::CompiledInstruction;
+        use solana_parser::solana::structs::SolanaAccount;
         use solana_pubkey::Pubkey;
         use std::str::FromStr;
         use visualsign::SignablePayloadField;

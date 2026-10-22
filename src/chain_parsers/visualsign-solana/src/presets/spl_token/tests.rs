@@ -1,8 +1,8 @@
 use super::*;
 use crate::core::VisualizerContext;
-use solana_parser::solana::structs::SolanaAccount;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_message::compiled_instruction::CompiledInstruction;
+use solana_parser::solana::structs::SolanaAccount;
 use solana_pubkey::Pubkey;
 use spl_token_interface::instruction as token_instruction;
 use spl_token_interface::instruction::AuthorityType;
@@ -40,15 +40,8 @@ struct CheckedTestCase {
     expected_name: &'static str,
     amount: u64,
     decimals: u8,
-    builder: fn(
-        &Pubkey,
-        &Pubkey,
-        &Pubkey,
-        &Pubkey,
-        &Pubkey,
-        u64,
-        u8,
-    ) -> solana_instruction::Instruction,
+    builder:
+        fn(&Pubkey, &Pubkey, &Pubkey, &Pubkey, &Pubkey, u64, u8) -> solana_instruction::Instruction,
     variant_check: fn(&TokenInstruction) -> bool,
 }
 
@@ -167,8 +160,15 @@ fn test_amount_instructions() {
             expected_name: "Transfer",
             amount: 1000,
             builder: |source, dest, owner, _unused, amount| {
-                token_instruction::transfer(&spl_token_interface::id(), source, dest, owner, &[], amount)
-                    .unwrap()
+                token_instruction::transfer(
+                    &spl_token_interface::id(),
+                    source,
+                    dest,
+                    owner,
+                    &[],
+                    amount,
+                )
+                .unwrap()
             },
             variant_check: |i| matches!(i, TokenInstruction::Transfer { .. }),
         },
@@ -177,8 +177,15 @@ fn test_amount_instructions() {
             expected_name: "Burn",
             amount: 250,
             builder: |account, mint, owner, _unused, amount| {
-                token_instruction::burn(&spl_token_interface::id(), account, mint, owner, &[], amount)
-                    .unwrap()
+                token_instruction::burn(
+                    &spl_token_interface::id(),
+                    account,
+                    mint,
+                    owner,
+                    &[],
+                    amount,
+                )
+                .unwrap()
             },
             variant_check: |i| matches!(i, TokenInstruction::Burn { .. }),
         },
@@ -187,8 +194,15 @@ fn test_amount_instructions() {
             expected_name: "Approve",
             amount: 10000,
             builder: |source, delegate, owner, _unused, amount| {
-                token_instruction::approve(&spl_token_interface::id(), source, delegate, owner, &[], amount)
-                    .unwrap()
+                token_instruction::approve(
+                    &spl_token_interface::id(),
+                    source,
+                    delegate,
+                    owner,
+                    &[],
+                    amount,
+                )
+                .unwrap()
             },
             variant_check: |i| matches!(i, TokenInstruction::Approve { .. }),
         },
@@ -283,8 +297,14 @@ fn test_simple_instructions() {
             name: "CloseAccount",
             expected_name: "Close Account",
             builder: |account, destination, owner| {
-                token_instruction::close_account(&spl_token_interface::id(), account, destination, owner, &[])
-                    .unwrap()
+                token_instruction::close_account(
+                    &spl_token_interface::id(),
+                    account,
+                    destination,
+                    owner,
+                    &[],
+                )
+                .unwrap()
             },
             variant_check: |i| matches!(i, TokenInstruction::CloseAccount),
         },
@@ -412,9 +432,15 @@ fn test_transfer_visualization_with_addresses() {
     let owner = Pubkey::new_unique();
     let amount = 1000u64;
 
-    let instruction =
-        token_instruction::transfer(&spl_token_interface::id(), &source, &destination, &owner, &[], amount)
-            .unwrap();
+    let instruction = token_instruction::transfer(
+        &spl_token_interface::id(),
+        &source,
+        &destination,
+        &owner,
+        &[],
+        amount,
+    )
+    .unwrap();
 
     // Create a context with this instruction
     let sender = SolanaAccount {
@@ -476,9 +502,15 @@ fn test_mint_to_visualization_with_amount() {
     let authority = Pubkey::new_unique();
     let amount = 5000u64;
 
-    let instruction =
-        token_instruction::mint_to(&spl_token_interface::id(), &mint, &account, &authority, &[], amount)
-            .unwrap();
+    let instruction = token_instruction::mint_to(
+        &spl_token_interface::id(),
+        &mint,
+        &account,
+        &authority,
+        &[],
+        amount,
+    )
+    .unwrap();
 
     // Create a context
     let sender = SolanaAccount {
@@ -586,9 +618,14 @@ fn test_thaw_account_visualization() {
     let mint = Pubkey::new_unique();
     let freeze_authority = Pubkey::new_unique();
 
-    let instruction =
-        token_instruction::thaw_account(&spl_token_interface::id(), &account, &mint, &freeze_authority, &[])
-            .unwrap();
+    let instruction = token_instruction::thaw_account(
+        &spl_token_interface::id(),
+        &account,
+        &mint,
+        &freeze_authority,
+        &[],
+    )
+    .unwrap();
 
     // Create a context
     let sender = SolanaAccount {
@@ -937,8 +974,15 @@ fn test_burn_visualization() {
     let account = Pubkey::new_unique();
     let mint = Pubkey::new_unique();
     let owner = Pubkey::new_unique();
-    let instruction =
-        token_instruction::burn(&spl_token_interface::id(), &account, &mint, &owner, &[], 250).unwrap();
+    let instruction = token_instruction::burn(
+        &spl_token_interface::id(),
+        &account,
+        &mint,
+        &owner,
+        &[],
+        250,
+    )
+    .unwrap();
     run_visualization_test(instruction, "Burn", &["Program ID", "Amount", "Raw Data"]);
 }
 
@@ -947,9 +991,16 @@ fn test_burn_checked_visualization() {
     let account = Pubkey::new_unique();
     let mint = Pubkey::new_unique();
     let owner = Pubkey::new_unique();
-    let instruction =
-        token_instruction::burn_checked(&spl_token_interface::id(), &account, &mint, &owner, &[], 250, 6)
-            .unwrap();
+    let instruction = token_instruction::burn_checked(
+        &spl_token_interface::id(),
+        &account,
+        &mint,
+        &owner,
+        &[],
+        250,
+        6,
+    )
+    .unwrap();
     run_visualization_test(
         instruction,
         "Burn",
@@ -962,9 +1013,15 @@ fn test_approve_visualization() {
     let source = Pubkey::new_unique();
     let delegate = Pubkey::new_unique();
     let owner = Pubkey::new_unique();
-    let instruction =
-        token_instruction::approve(&spl_token_interface::id(), &source, &delegate, &owner, &[], 10_000)
-            .unwrap();
+    let instruction = token_instruction::approve(
+        &spl_token_interface::id(),
+        &source,
+        &delegate,
+        &owner,
+        &[],
+        10_000,
+    )
+    .unwrap();
     run_visualization_test(
         instruction,
         "Approve",
@@ -1025,7 +1082,8 @@ fn test_revoke_visualization() {
     // variant's mint absence is reported via tracing::debug! instead).
     let source = Pubkey::new_unique();
     let owner = Pubkey::new_unique();
-    let instruction = token_instruction::revoke(&spl_token_interface::id(), &source, &owner, &[]).unwrap();
+    let instruction =
+        token_instruction::revoke(&spl_token_interface::id(), &source, &owner, &[]).unwrap();
     run_visualization_test(
         instruction,
         "Revoke",
@@ -1041,7 +1099,8 @@ fn test_close_account_visualization() {
     let dest = Pubkey::new_unique();
     let owner = Pubkey::new_unique();
     let instruction =
-        token_instruction::close_account(&spl_token_interface::id(), &account, &dest, &owner, &[]).unwrap();
+        token_instruction::close_account(&spl_token_interface::id(), &account, &dest, &owner, &[])
+            .unwrap();
     run_visualization_test(
         instruction,
         "Close Account",
@@ -1062,9 +1121,14 @@ fn test_initialize_mint_visualization() {
     // and Freeze Authority (from instruction data).
     let mint = Pubkey::new_unique();
     let mint_authority = Pubkey::new_unique();
-    let instruction =
-        token_instruction::initialize_mint(&spl_token_interface::id(), &mint, &mint_authority, None, 6)
-            .unwrap();
+    let instruction = token_instruction::initialize_mint(
+        &spl_token_interface::id(),
+        &mint,
+        &mint_authority,
+        None,
+        6,
+    )
+    .unwrap();
     run_visualization_test(
         instruction,
         "Initialize Mint",

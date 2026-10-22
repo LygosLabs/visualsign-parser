@@ -29,9 +29,8 @@ pub fn system_instruction_label(instruction: &SystemInstruction) -> String {
             format!("Transfer With Seed (from_owner: {from_owner})")
         }
         SystemInstruction::UpgradeNonceAccount => "Upgrade Nonce Account".to_string(),
-        SystemInstruction::CreateAccountAllowPrefund { owner, .. } => {
-            format!("Create Account Allow Prefund (owner: {owner})")
-        }
+        // Rejected by SystemVisualizer before labels are built.
+        SystemInstruction::CreateAccountAllowPrefund { .. } => String::new(),
     }
 }
 

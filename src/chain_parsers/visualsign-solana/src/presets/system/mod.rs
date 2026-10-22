@@ -245,8 +245,8 @@ fn create_system_preview_layout(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use solana_parser::solana::structs::SolanaAccount;
     use solana_message::compiled_instruction::CompiledInstruction;
+    use solana_parser::solana::structs::SolanaAccount;
     use solana_pubkey::Pubkey;
 
     fn text_field_value(fields: &[AnnotatedPayloadField], label: &str) -> Option<String> {

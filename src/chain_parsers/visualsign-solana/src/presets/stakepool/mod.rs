@@ -4,7 +4,9 @@ mod config;
 
 #[cfg(feature = "stake-pool")]
 use crate::core::resolve_program_display;
-use crate::core::{InstructionVisualizer, SolanaIntegrationConfig, VisualizerContext, VisualizerKind};
+use crate::core::{
+    InstructionVisualizer, SolanaIntegrationConfig, VisualizerContext, VisualizerKind,
+};
 use config::StakepoolConfig;
 #[cfg(feature = "stake-pool")]
 use spl_stake_pool::instruction::StakePoolInstruction;

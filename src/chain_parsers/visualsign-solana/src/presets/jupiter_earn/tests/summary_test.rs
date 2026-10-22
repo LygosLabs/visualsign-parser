@@ -237,7 +237,9 @@ fn test_uncapped_priority_fee_is_hoisted_as_a_maximum() {
     let deposit = instruction_from_fixture(&load_fixture("deposit_usdc"));
     let payer = deposit.accounts[0].pubkey;
     let compute_price =
-        solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_price(1_000_000_000);
+        solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_price(
+            1_000_000_000,
+        );
 
     let payload = payload_for(&[compute_price, deposit], &payer);
 
@@ -387,7 +389,8 @@ fn test_deposit_plus_token_transfer_keeps_default_title() {
 fn test_deposit_plus_sol_transfer_keeps_default_title() {
     let deposit = instruction_from_fixture(&load_fixture("deposit_usdc"));
     let payer = deposit.accounts[0].pubkey;
-    let transfer = solana_system_interface::instruction::transfer(&payer, &Pubkey::new_unique(), 1_000);
+    let transfer =
+        solana_system_interface::instruction::transfer(&payer, &Pubkey::new_unique(), 1_000);
 
     let payload = payload_for(&[transfer, deposit], &payer);
 
