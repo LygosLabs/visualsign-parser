@@ -7,9 +7,10 @@
 //! Amounts: a segwit v0 sighash commits only to the amount of its own input, so
 //! a lying `witness_utxo` can hide an arbitrary fee. An input amount is
 //! therefore only `Verified` when a `non_witness_utxo` hashes to the prevout
-//! txid. The fee is verified when every input is verified, or when every input
-//! spends a taproot output (a BIP-341 signature commits to all input amounts,
-//! so whichever input gets signed binds the rest).
+//! txid. With only ALL / DEFAULT sighashes, the fee is verified when every input
+//! is verified, or when every input spends a taproot output (a BIP-341
+//! ALL / DEFAULT signature without ANYONECANPAY commits to all input amounts
+//! and outputs, so whichever input gets signed binds the rest).
 
 use crate::scripts::{self, ScriptDetail};
 use bitcoin::psbt::{Input, Output, Psbt};
@@ -151,7 +152,12 @@ fn compute_fee(
         && prevout_scripts
             .iter()
             .all(|s| s.as_ref().is_some_and(|s| s.is_p2tr()));
-    Ok(if all_verified || all_taproot {
+    Ok(if inputs.iter().any(|i| i.sighash_warning.is_some()) {
+        Fee::Unverified {
+            fee,
+            reason: "sighash type does not commit to all input amounts and outputs",
+        }
+    } else if all_verified || all_taproot {
         Fee::Verified(fee)
     } else {
         Fee::Unverified {

@@ -13,7 +13,7 @@ use bitcoin::script::Instruction;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, XOnlyPublicKey};
 use bitcoin::taproot::{TapLeafHash, TaprootSpendInfo};
 use bitcoin::{Script, ScriptBuf};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 /// BIP-341 NUMS point: an internal key nobody can sign for.
@@ -94,7 +94,8 @@ fn parse_multi(script: &Script) -> Option<(usize, Vec<PublicKey>)> {
             _ => None,
         })
         .collect::<Option<Vec<_>>>()?;
-    (keys.len() == n && (1..=n).contains(&k) && n <= MAX_WSH_KEYS).then_some((k, keys))
+    let unique = keys.iter().collect::<BTreeSet<_>>().len() == keys.len();
+    (unique && keys.len() == n && (1..=n).contains(&k) && n <= MAX_WSH_KEYS).then_some((k, keys))
 }
 
 /// `<x1> OP_CHECKSIG (<xi> OP_CHECKSIGADD)* <k> OP_NUMEQUAL`
@@ -123,7 +124,8 @@ fn parse_multi_a(script: &Script) -> Option<(usize, Vec<XOnlyPublicKey>)> {
             _ => return None,
         }
     }
-    (1..=keys.len()).contains(&k).then_some((k, keys))
+    let unique = keys.iter().collect::<BTreeSet<_>>().len() == keys.len();
+    (unique && (1..=keys.len()).contains(&k)).then_some((k, keys))
 }
 
 fn unrecognized(script: &Script, reason: &'static str) -> ScriptDetail {

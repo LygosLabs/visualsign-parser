@@ -14,17 +14,18 @@
 //!   test vectors, whose first receive addresses are asserted below). The previous
 //!   transactions are synthetic. `REGEN_FIXTURES=1` rewrites their `.input` files.
 
+use base64::Engine as _;
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpriv};
 use bitcoin::hashes::Hash;
 use bitcoin::key::TapTweak;
-use bitcoin::opcodes::all::{OP_CHECKSIG, OP_CHECKSIGADD, OP_NUMEQUAL};
+use bitcoin::opcodes::all::{OP_CHECKMULTISIG, OP_CHECKSIG, OP_CHECKSIGADD, OP_NUMEQUAL};
 use bitcoin::psbt::{Psbt, PsbtSighashType};
 use bitcoin::script::Builder;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, XOnlyPublicKey};
 use bitcoin::taproot::{LeafVersion, TapLeafHash, TapTree, TaprootBuilder};
 use bitcoin::{
     Address, Amount, EcdsaSighashType, Network, NetworkKind, OutPoint, ScriptBuf, Sequence,
-    Transaction, TxIn, TxOut, Txid, Witness, absolute, transaction,
+    TapSighashType, Transaction, TxIn, TxOut, Txid, Witness, absolute, transaction,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -435,7 +436,6 @@ fn output_is_ascii_only() {
 
 #[test]
 fn hex_base64_and_prefixed_hex_agree() {
-    use base64::Engine as _;
     let p = p2wpkh_single_sig();
     let bytes = p.serialize();
     let as_hex = hex::encode(&bytes);
@@ -710,4 +710,131 @@ fn tap_script_not_committed_by_the_output_is_unrecognized() {
 fn bip174_p2sh_p2wsh_multisig_is_recognized() {
     let json = convert_json(&read_input("bip174-p2sh-p2wsh-multisig"));
     assert!(json.contains("2 of 2 (P2SH-P2WSH)"), "{json}");
+}
+
+#[test]
+fn weak_sighashes_leave_all_taproot_fees_unverified() {
+    for sighash in [
+        TapSighashType::AllPlusAnyoneCanPay,
+        TapSighashType::None,
+        TapSighashType::Single,
+    ] {
+        let mut p = p2tr_single_sig();
+        // Two inputs exercise the ANYONECANPAY amount-commitment gap.
+        let prev = prev_tx(p2tr("m/86'/0'/1'/0/0"), 100_000, 10);
+        p.unsigned_tx.input.push(TxIn {
+            previous_output: OutPoint::new(prev.compute_txid(), 0),
+            ..p.unsigned_tx.input[0].clone()
+        });
+        p.inputs.push(bitcoin::psbt::Input {
+            witness_utxo: Some(prev.output[0].clone()),
+            ..Default::default()
+        });
+        // Any weak input must downgrade the fee, even alongside DEFAULT.
+        p.inputs[1].sighash_type = Some(sighash.into());
+        let json = json_of(&p);
+        assert!(
+            json.contains("0.00101000 BTC (unverified: sighash"),
+            "{sighash}: {json}"
+        );
+    }
+}
+
+#[test]
+fn weak_sighashes_leave_prev_tx_verified_fees_unverified() {
+    for sighash in [
+        EcdsaSighashType::AllPlusAnyoneCanPay,
+        EcdsaSighashType::None,
+        EcdsaSighashType::Single,
+    ] {
+        let mut p = p2wpkh_single_sig();
+        p.inputs[0].sighash_type = Some(sighash.into());
+        let json = json_of(&p);
+        assert!(
+            json.contains("0.00001000 BTC (unverified: sighash"),
+            "{sighash}: {json}"
+        );
+    }
+}
+
+#[test]
+fn explicit_all_and_default_sighashes_keep_taproot_fee_verified() {
+    for sighash in [TapSighashType::Default, TapSighashType::All] {
+        let mut p = p2tr_single_sig();
+        p.inputs[0].sighash_type = Some(sighash.into());
+        assert!(!json_of(&p).contains("BTC (unverified:"));
+    }
+}
+
+#[test]
+fn repeated_wsh_keys_are_shown_as_raw_scripts() {
+    let a = pubkey("m/84'/0'/0'/0/0");
+    let v = pubkey("m/84'/0'/1'/0/0");
+    let script = Builder::new()
+        .push_int(2)
+        .push_slice(a.serialize())
+        .push_slice(a.serialize())
+        .push_slice(v.serialize())
+        .push_int(3)
+        .push_opcode(OP_CHECKMULTISIG)
+        .into_script();
+    for wrapped in [false, true] {
+        let redeem = script.to_p2wsh();
+        let spk = if wrapped {
+            redeem.to_p2sh()
+        } else {
+            redeem.clone()
+        };
+        let prev = prev_tx(spk.clone(), 100_000, 9);
+        let mut p = spend(&prev, vec![txout(spk, 99_000)]);
+        p.inputs[0].witness_utxo = Some(prev.output[0].clone());
+        p.inputs[0].witness_script = Some(script.clone());
+        p.outputs[0].witness_script = Some(script.clone());
+        if wrapped {
+            p.inputs[0].redeem_script = Some(redeem.clone());
+            p.outputs[0].redeem_script = Some(redeem);
+        }
+        let json = json_of(&p);
+        assert!(json.contains("unrecognized script"), "{json}");
+        assert!(json.contains(&script.to_hex_string()));
+        assert!(!json.contains("Multisig"), "{json}");
+    }
+}
+
+#[test]
+fn repeated_taproot_keys_are_shown_as_raw_scripts() {
+    let a = xonly("m/86'/0'/0'/0/0");
+    let v = xonly("m/86'/0'/1'/0/0");
+    let script = multi_a_script(2, &[a, a, v]);
+    let json = json_of(&tr_multi_a_with(nums(), Some(script.clone())));
+    assert!(json.contains("unrecognized script"), "{json}");
+    assert!(json.contains(&script.to_hex_string()));
+    assert!(!json.contains("Multisig"), "{json}");
+}
+
+#[test]
+fn psbt_network_is_unknown_while_address_encoding_is_explicit() {
+    for network in [Network::Bitcoin, Network::Testnet, Network::Signet] {
+        let json = convert_with(&encode(&p2tr_single_sig()), network)
+            .unwrap()
+            .to_json()
+            .unwrap();
+        assert!(json.contains(r#""Label":"Address Encoding""#), "{json}");
+        assert!(json.contains("transaction network unknown"), "{json}");
+        assert!(!json.contains(r#""Label":"Network""#), "{json}");
+    }
+}
+
+#[test]
+fn claimed_input_amount_is_marked_in_preview_subtitle() {
+    let claimed = json_of(&p2wpkh_without_prev_tx());
+    assert!(
+        claimed.contains("0.00100000 BTC (claimed amount, unverified) from"),
+        "{claimed}"
+    );
+    let verified = json_of(&p2wpkh_single_sig());
+    assert!(
+        !verified.contains("claimed amount, unverified"),
+        "{verified}"
+    );
 }

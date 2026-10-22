@@ -3,7 +3,7 @@
 //! Decodes a base64 or hex PSBT into inputs, outputs and fee. The parser holds
 //! no keys: it cannot tell change from payments, so outputs carrying
 //! derivation data are shown as "claims change (unverified by parser)", and a
-//! fee whose input amounts are not bound by a previous transaction is flagged
+//! fee whose input amounts or sighash commitments cannot be trusted is flagged
 //! as unverified. See [`analysis`] for the exact rules.
 
 mod analysis;
@@ -155,8 +155,10 @@ fn build_payload(
     network: Network,
     options: VisualSignOptions,
 ) -> Result<SignablePayload, VisualSignError> {
-    let mut fields: Vec<AnnotatedPayloadField> =
-        vec![create_text_field("Network", &network_label(network))?];
+    let mut fields: Vec<AnnotatedPayloadField> = vec![create_text_field(
+        "Address Encoding",
+        &format!("{} (transaction network unknown)", network_label(network)),
+    )?];
 
     for (i, input) in analysis.inputs.iter().enumerate() {
         fields.push(input_field(i, input)?);
@@ -213,7 +215,12 @@ fn input_field(index: usize, input: &InputInfo) -> Result<AnnotatedPayloadField,
     let amount_text = match input.amount {
         Some(amount) => {
             expanded.push(create_amount_field("Amount", &btc(amount), "BTC")?);
-            format!("{} BTC", btc(amount))
+            let marker = if input.source == AmountSource::Claimed {
+                " (claimed amount, unverified)"
+            } else {
+                ""
+            };
+            format!("{} BTC{marker}", btc(amount))
         }
         None => {
             expanded.push(create_text_field("Amount", "unknown (no UTXO data)")?);

@@ -15,8 +15,8 @@ The Bitcoin module decodes Partially Signed Bitcoin Transactions (PSBTs) into Vi
 ### Key components
 
 The Bitcoin parser produces:
-- `Network`
-- One expandable `Input N` per input: outpoint, address, script type, amount, and where the amount came from.
+- `Address Encoding`, explicitly marked `transaction network unknown`: the chosen encoding does not establish the transaction's network. The enclave uses mainnet encoding; the CLI accepts the selection above.
+- One expandable `Input N` per input: outpoint, address, script type, amount, and where the amount came from. A `witness_utxo`-only amount is also marked `claimed amount, unverified` in the preview subtitle.
 - One expandable `Output N` per output: address (or the raw script for `OP_RETURN` and other non-address scripts), script type and amount.
 - Multisig details inside an input or output when the PSBT carries a recognized script: `Multisig` (threshold, script kind), `Cosigner N` (key and origin), and for taproot the `Internal Key`.
 - `Fee`, and `Lock Time` when non-zero.
@@ -30,14 +30,14 @@ The parser holds no keys. It checks what a PSBT can prove on its own and flags t
 | `non_witness_utxo` does not hash to the prevout txid, or the output index is out of range | Rejected |
 | `witness_utxo` disagrees with `non_witness_utxo` | Rejected |
 | Outputs exceed inputs | Rejected |
-| Every input amount verified through its previous transaction | `Fee` shown as an amount |
-| Every input spends a taproot output | `Fee` shown as an amount (a BIP-341 signature commits to all input amounts) |
+| Every input amount verified through its previous transaction, with only ALL / DEFAULT sighashes | `Fee` shown as an amount |
+| Every input spends a taproot output, with only ALL / DEFAULT sighashes | `Fee` shown as an amount (a BIP-341 ALL / DEFAULT signature without ANYONECANPAY commits to all input amounts and outputs) |
 | Any other input amount known only from `witness_utxo` | `Fee` shown with `(unverified: ...)`. A segwit v0 signature commits only to its own input amount, so a wrong `witness_utxo` can hide a large fee. |
 | An input has no UTXO data | `Fee` shown as `unknown` |
 | An output carries `bip32_derivation` or `tap_key_origins` | Labeled `claims change (unverified by parser)`. The parser cannot check that the keys belong to the signer. |
-| An input or output carries a `witness_script` (wsh, optionally P2SH-wrapped) or tap leaf scripts | If the script is bound to the output (script hash, or taproot commitment through the control block or tap tree) and matches `multi`/`sortedmulti` or `multi_a`, the threshold, cosigner keys and key origins are shown. Anything else is shown raw as `unrecognized script`. |
+| An input or output carries a `witness_script` (wsh, optionally P2SH-wrapped) or tap leaf scripts | If the script is bound to the output (script hash, or taproot commitment through the control block or tap tree) and matches `multi`/`sortedmulti` or `multi_a` with distinct keys, the threshold, cosigner keys and key origins are shown. Anything else is shown raw as `unrecognized script`. |
 | Taproot multisig whose internal key is not the BIP-341 NUMS point | `Internal Key Warning: internal key can spend alone` |
-| Input requests a sighash type other than ALL/DEFAULT | A `Sighash Type` field is shown |
+| Input requests a sighash type other than ALL/DEFAULT | A `Sighash Type` field is shown and a known `Fee` is marked unverified: ANYONECANPAY does not bind all input amounts, and NONE / SINGLE do not bind all outputs. |
 
 Change verification (deriving the claimed change key from an account xpub) needs key material the parser does not have, and belongs in the signer.
 
