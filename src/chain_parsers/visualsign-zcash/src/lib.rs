@@ -31,6 +31,10 @@
 //! Shielded and per-transparent-input ZIP-244 sighashes are returned so a
 //! wallet can bind its signatures to the rendered payload. Only SIGHASH_ALL
 //! transparent inputs are accepted. The declared network is unsigned metadata.
+//!
+//! Resource policy: at most 4 MiB of encoded PCZT bytes and 64 total Sapling
+//! outputs plus Orchard/Ironwood actions (including padding) are accepted.
+//! The aggregate count is checked before sighashes, note recovery, and rendering.
 
 #[cfg(feature = "cli-plugin")]
 pub mod cli_plugin;
@@ -63,6 +67,12 @@ use zcash_transparent::address::TransparentAddress;
 /// Largest PCZT accepted, in bytes.
 pub const MAX_PCZT_BYTES: usize = 4 * 1024 * 1024;
 
+/// Maximum total Sapling outputs plus Orchard and Ironwood actions, including
+/// zero-value padding. This parser policy bounds per-output commitment checks,
+/// note recovery, and rendering to 64 output records per request, while allowing
+/// batch payments. It is independent of the byte cap and Zcash consensus rules.
+pub const MAX_SHIELDED_OUTPUTS: usize = 64;
+
 /// Text shown wherever the parser would need a viewing key to say more.
 pub const UNVERIFIED: &str = "unverified (parser has no viewing key)";
 
@@ -89,6 +99,20 @@ impl ZcashTransactionWrapper {
         }
         let pczt = Pczt::parse(bytes)
             .map_err(|e| TransactionParseError::DecodeError(format!("PCZT: {e:?}")))?;
+        // Check the shared work budget before cloning/re-encoding the PCZT,
+        // computing sighashes, or doing any commitment checks/note recovery.
+        // Count padding too: its note fields and ciphertext still need checking.
+        let shielded_outputs = pczt
+            .sapling()
+            .outputs()
+            .len()
+            .saturating_add(pczt.orchard().actions().len())
+            .saturating_add(pczt.ironwood().actions().len());
+        if shielded_outputs > MAX_SHIELDED_OUTPUTS {
+            return Err(TransactionParseError::InvalidFormat(format!(
+                "PCZT has {shielded_outputs} shielded outputs/actions; the limit is {MAX_SHIELDED_OUTPUTS}"
+            )));
+        }
         let version = bytes
             .get(4..8)
             .and_then(|v| <[u8; 4]>::try_from(v).ok())
