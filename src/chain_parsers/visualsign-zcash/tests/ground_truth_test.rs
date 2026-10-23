@@ -23,9 +23,9 @@ use common::{Decrypted, Rendered, decrypt_tx, edit_pczt, memo_text, render, scri
 use orchard::keys::Scope;
 use sapling_crypto::keys::PreparedIncomingViewingKey;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::fs;
 use std::time::Instant;
+use visualsign_zcash::MAX_SHIELDED_OUTPUTS;
 use zcash_keys::address::UnifiedAddress;
 use zcash_keys::encoding::AddressCodec;
 use zcash_protocol::consensus::Network;
@@ -404,53 +404,49 @@ fn padded_bundle_is_counted_and_priced() {
     assert_eq!(r.fee_check, "equals the ZIP-317 conventional fee");
 }
 
-#[test]
-fn oversized_action_count_is_flagged_as_underpaid() {
-    // Copy the zero-value padding action until the PCZT is megabytes long.
-    // The fee still pays for the original actions only.
-    let bytes = fixture("transparent_mix_v5");
-    let mut sizes = BTreeMap::new();
-    for extra in [10usize, 100] {
-        let big = edit_pczt(&bytes, |v| {
-            let actions = v["orchard"]["actions"].as_array_mut().unwrap();
-            let pad = actions
-                .iter()
-                .find(|a| a["output"]["value"] == 0)
-                .unwrap()
-                .clone();
-            actions.extend(std::iter::repeat_n(pad, extra));
-        });
-        let started = Instant::now();
-        let r = render(&big).unwrap();
-        sizes.insert(extra, (big.len(), started.elapsed()));
-        assert!(
-            r.fee_check
-                .starts_with("below the ZIP-317 conventional fee"),
-            "{extra} extra actions: {}",
-            r.fee_check
-        );
-        assert!(r.padding >= extra);
-    }
-    println!("padding actions -> (PCZT bytes, parse time): {sizes:?}");
-}
-
-#[test]
-#[ignore = "finding on #578: a PCZT whose transaction cannot fit the 2 MB consensus block size is parsed in full (about 6 ms of note checks per action in release, 10 s at the 4 MiB cap) instead of refused"]
-fn pczt_too_large_for_any_valid_transaction_is_refused() {
-    // Each Orchard action costs at least 820 bytes of action data, a 64-byte
-    // signature and 2272 bytes of proof in the final transaction, so 1 000
-    // actions are over 3 MB: no block can ever include it.
-    let big = edit_pczt(&fixture("transparent_mix_v5"), |v| {
-        let actions = v["orchard"]["actions"].as_array_mut().unwrap();
-        let pad = actions
+/// `transparent_mix_v5` with its zero-value padding action copied until the
+/// Orchard bundle has `actions` actions. The fee still pays for two.
+fn padded_to(actions: usize) -> Vec<u8> {
+    edit_pczt(&fixture("transparent_mix_v5"), |v| {
+        let list = v["orchard"]["actions"].as_array_mut().unwrap();
+        let pad = list
             .iter()
             .find(|a| a["output"]["value"] == 0)
             .unwrap()
             .clone();
-        actions.extend(std::iter::repeat_n(pad, 1_000));
-    });
+        let extra = actions - list.len();
+        list.extend(std::iter::repeat_n(pad, extra));
+    })
+}
+
+#[test]
+fn oversized_action_count_is_flagged_as_underpaid() {
+    // Up to the parser's output budget the PCZT renders, flagged as paying
+    // less than the ZIP-317 fee for its action count.
+    let r = render(&padded_to(MAX_SHIELDED_OUTPUTS)).unwrap();
     assert!(
-        render(&big).is_err(),
-        "rendered a transaction no block can hold"
+        r.fee_check
+            .starts_with("below the ZIP-317 conventional fee"),
+        "{}",
+        r.fee_check
     );
+    assert_eq!(r.padding, MAX_SHIELDED_OUTPUTS - 1);
+}
+
+#[test]
+fn pczt_too_large_for_any_valid_transaction_is_refused() {
+    // Regression for the finding pinned against #578 at 89281ac8: 1 000
+    // padding actions (over 3 MB once proven, so no block can hold the
+    // transaction) were parsed in full, about 6 ms of note checks per action.
+    // 0308bce7 refuses more than MAX_SHIELDED_OUTPUTS outputs/actions right
+    // after deserialization.
+    for actions in [MAX_SHIELDED_OUTPUTS + 1, 1_000] {
+        let started = Instant::now();
+        let err = render(&padded_to(actions)).unwrap_err();
+        assert!(
+            err.to_string().contains("the limit is"),
+            "{actions} actions: {err}"
+        );
+        println!("{actions} actions refused in {:?}", started.elapsed());
+    }
 }
