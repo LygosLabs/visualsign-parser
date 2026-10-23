@@ -14,7 +14,9 @@ use visualsign::SignablePayload;
 use visualsign::vsptrait::{
     TransactionParseError, VisualSignConverterFromString, VisualSignError, VisualSignOptions,
 };
-use visualsign_zcash::{MAX_PCZT_BYTES, UNVERIFIED, ZcashVisualSignConverter};
+use visualsign_zcash::{
+    MAX_PCZT_BYTES, UNVERIFIED, ZcashTransactionWrapper, ZcashVisualSignConverter,
+};
 use zcash_keys::address::UnifiedAddress;
 use zcash_keys::encoding::AddressCodec;
 
@@ -655,4 +657,106 @@ fn review_transparent_only_transaction_has_a_distinct_digest_for_each_input() {
         text(&p, "Transparent input 1 sighash (ZIP-244)"),
         text(&p, "Shielded sighash (ZIP-244)")
     );
+}
+
+// Repeat valid serialization records to exercise the parser's work budget.
+// These need not be consensus-valid transactions: admission must happen before
+// note checking, sighash extraction, or rendering can encounter any bad record.
+fn repeat_shielded_records(b: &[u8], pool: &str, field: &str, count: usize) -> Vec<u8> {
+    edit_pczt(b, |v| {
+        let items = v[pool][field].as_array_mut().unwrap();
+        let original = items.clone();
+        *items = (0..count)
+            .map(|i| original[i % original.len()].clone())
+            .collect();
+        for (other_pool, other_field) in [
+            ("orchard", "actions"),
+            ("ironwood", "actions"),
+            ("sapling", "outputs"),
+        ] {
+            if other_pool != pool && v[other_pool].is_object() {
+                v[other_pool][other_field] = serde_json::json!([]);
+            }
+        }
+    })
+}
+
+#[test]
+fn shielded_work_limit_bounds_each_pool_before_conversion() {
+    for (fixture, pool, field) in [
+        ("orchard_send_v5", "orchard", "actions"),
+        // This fixture mixes a payment with zero-value padding, so ignoring
+        // padding in the work budget would wrongly admit its repeated records.
+        ("keystone_v1_orchard_to_transparent", "orchard", "actions"),
+        ("ironwood_send_v6", "ironwood", "actions"),
+        ("sapling_send_v5", "sapling", "outputs"),
+    ] {
+        for count in [64, 65] {
+            let v2 = repeat_shielded_records(&bytes(fixture), pool, field, count);
+            assert!(v2.len() < MAX_PCZT_BYTES);
+            let pczt = pczt::Pczt::parse(&v2).unwrap();
+            let mut encodings = vec![v2];
+            // Ironwood cannot be encoded as v1.
+            if let Ok(v1) = pczt::v1::Pczt::try_from(pczt) {
+                encodings.push(v1.serialize());
+            }
+            for b in encodings {
+                let result = ZcashTransactionWrapper::from_bytes(&b).map(|_| ());
+                if count == 64 {
+                    assert!(result.is_ok(), "{pool}: {result:?}");
+                } else {
+                    assert!(
+                        matches!(result, Err(TransactionParseError::InvalidFormat(ref message))
+                        if message.contains("shielded") && message.contains("64")),
+                        "{pool}: {result:?}"
+                    );
+                    // Conversion must fail at admission, before invalid duplicated
+                    // records could produce a later commitment or balance error.
+                    assert!(matches!(
+                        parse_error(parse_bytes(&b)),
+                        TransactionParseError::InvalidFormat(_)
+                    ));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn shielded_work_limit_is_shared_across_pools() {
+    let orchard = repeat_shielded_records(&bytes("orchard_send_v5"), "orchard", "actions", 22);
+    let sapling = repeat_shielded_records(&bytes("sapling_send_v5"), "sapling", "outputs", 21);
+    let ironwood = repeat_shielded_records(&bytes("ironwood_send_v6"), "ironwood", "actions", 21);
+    let mut source = serde_json::Value::Null;
+    edit_pczt(&ironwood, |v| source = v.clone());
+    let mut sapling_bundle = serde_json::Value::Null;
+    edit_pczt(&sapling, |v| sapling_bundle = v["sapling"].clone());
+    let boundary = edit_pczt(&orchard, |v| {
+        v["ironwood"] = source["ironwood"].clone();
+        v["sapling"] = sapling_bundle;
+    });
+    assert!(ZcashTransactionWrapper::from_bytes(&boundary).is_ok());
+    let over = edit_pczt(&boundary, |v| {
+        let outputs = v["sapling"]["outputs"].as_array_mut().unwrap();
+        outputs.push(outputs[0].clone());
+    });
+    assert!(over.len() < MAX_PCZT_BYTES);
+    assert!(matches!(
+        ZcashTransactionWrapper::from_bytes(&over),
+        Err(TransactionParseError::InvalidFormat(message)) if message.contains("shielded")
+    ));
+}
+
+#[test]
+fn shielded_work_limit_preserves_boundary_payment_rendering() {
+    let pczt = builder::build(&builder::Spec {
+        height: builder::PRE_NU6_3,
+        transparent_in: Some(100_000_000),
+        orchard_out: vec![(1_000, "batch payment"); 64],
+        change: Some(builder::ChangePool::Transparent),
+        ..Default::default()
+    });
+    let payload = parse_bytes(&pczt).unwrap();
+    assert_eq!(outputs(&payload).len(), 65); // 64 payments plus transparent change.
+    assert_eq!(text(&payload, "Output 64 amount"), "0.00001000 ZEC");
 }
