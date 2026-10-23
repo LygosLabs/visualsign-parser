@@ -447,18 +447,17 @@ fn hex_base64_and_prefixed_hex_agree() {
 }
 
 #[test]
-fn verified_fee_and_change_claim_are_reported() {
+fn verified_fee_and_all_outputs_are_reported() {
     let json = json_of(&p2wpkh_single_sig());
     assert!(json.contains(r#""Label":"Fee""#));
     assert!(
         json.contains(r#""FallbackText":"0.00001000 BTC""#),
         "{json}"
     );
-    assert!(json.contains("claims change (unverified by parser)"));
-    assert!(json.contains(r#""Label":"Change""#));
-    // Only the output with derivation data (Output 1) makes the claim.
-    assert!(json.contains("0.00039000 BTC - claims change (unverified by parser)"));
-    assert!(!json.contains("0.00060000 BTC - claims change"));
+    assert!(!json.contains("claims change"));
+    assert!(!json.contains(r#""Label":"Change""#));
+    assert!(json.contains("0.00039000 BTC"));
+    assert!(json.contains("0.00060000 BTC"));
     assert!(json.contains("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"));
     assert!(json.contains("verified against previous transaction"));
 }
@@ -466,7 +465,10 @@ fn verified_fee_and_change_claim_are_reported() {
 #[test]
 fn segwit_v0_without_prev_tx_flags_fee_unverified() {
     let json = json_of(&p2wpkh_without_prev_tx());
-    assert!(json.contains("0.00001000 BTC (unverified:"), "{json}");
+    assert!(
+        json.contains("unknown (claimed 0.00001000 BTC; unverified:"),
+        "{json}"
+    );
     assert!(json.contains("claimed by witness_utxo only"));
 }
 
@@ -478,7 +480,7 @@ fn all_taproot_inputs_bind_the_fee() {
         json.contains(r#""FallbackText":"0.00001000 BTC""#),
         "{json}"
     );
-    assert!(json.contains("claims change (unverified by parser)"));
+    assert!(!json.contains("claims change"));
 }
 
 #[test]
@@ -508,7 +510,7 @@ fn mixed_taproot_and_v0_claims_are_unverified() {
     };
     p.inputs = vec![v0_in, tr_in];
     let json = json_of(&p);
-    assert!(json.contains("(unverified: input amounts"), "{json}");
+    assert!(json.contains("; unverified: input amounts"), "{json}");
 }
 
 #[test]
@@ -559,12 +561,10 @@ fn prevout_index_out_of_range_is_rejected() {
 #[test]
 fn non_default_sighash_is_surfaced() {
     let mut p = p2wpkh_single_sig();
-    p.inputs[0].sighash_type = Some(PsbtSighashType::from(
-        EcdsaSighashType::NonePlusAnyoneCanPay,
-    ));
+    p.inputs[0].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::AllPlusAnyoneCanPay));
     let json = json_of(&p);
     assert!(json.contains("Sighash Type"), "{json}");
-    assert!(json.contains("SIGHASH_NONE|SIGHASH_ANYONECANPAY"), "{json}");
+    assert!(json.contains("SIGHASH_ALL|SIGHASH_ANYONECANPAY"), "{json}");
 
     let mut p = p2wpkh_single_sig();
     p.inputs[0].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::All));
@@ -713,48 +713,38 @@ fn bip174_p2sh_p2wsh_multisig_is_recognized() {
 }
 
 #[test]
-fn weak_sighashes_leave_all_taproot_fees_unverified() {
-    for sighash in [
-        TapSighashType::AllPlusAnyoneCanPay,
-        TapSighashType::None,
-        TapSighashType::Single,
-    ] {
-        let mut p = p2tr_single_sig();
-        // Two inputs exercise the ANYONECANPAY amount-commitment gap.
-        let prev = prev_tx(p2tr("m/86'/0'/1'/0/0"), 100_000, 10);
-        p.unsigned_tx.input.push(TxIn {
-            previous_output: OutPoint::new(prev.compute_txid(), 0),
-            ..p.unsigned_tx.input[0].clone()
-        });
-        p.inputs.push(bitcoin::psbt::Input {
-            witness_utxo: Some(prev.output[0].clone()),
-            ..Default::default()
-        });
-        // Any weak input must downgrade the fee, even alongside DEFAULT.
-        p.inputs[1].sighash_type = Some(sighash.into());
-        let json = json_of(&p);
-        assert!(
-            json.contains("0.00101000 BTC (unverified: sighash"),
-            "{sighash}: {json}"
-        );
-    }
+fn anyonecanpay_leaves_all_taproot_fees_unverified() {
+    let sighash = TapSighashType::AllPlusAnyoneCanPay;
+    let mut p = p2tr_single_sig();
+    // Two inputs exercise the ANYONECANPAY amount-commitment gap.
+    let prev = prev_tx(p2tr("m/86'/0'/1'/0/0"), 100_000, 10);
+    p.unsigned_tx.input.push(TxIn {
+        previous_output: OutPoint::new(prev.compute_txid(), 0),
+        ..p.unsigned_tx.input[0].clone()
+    });
+    p.inputs.push(bitcoin::psbt::Input {
+        witness_utxo: Some(prev.output[0].clone()),
+        ..Default::default()
+    });
+    // Any weak input must downgrade the fee, even alongside DEFAULT.
+    p.inputs[1].sighash_type = Some(sighash.into());
+    let json = json_of(&p);
+    assert!(
+        json.contains("unknown (claimed 0.00101000 BTC; unverified: sighash"),
+        "{sighash}: {json}"
+    );
 }
 
 #[test]
-fn weak_sighashes_leave_prev_tx_verified_fees_unverified() {
-    for sighash in [
-        EcdsaSighashType::AllPlusAnyoneCanPay,
-        EcdsaSighashType::None,
-        EcdsaSighashType::Single,
-    ] {
-        let mut p = p2wpkh_single_sig();
-        p.inputs[0].sighash_type = Some(sighash.into());
-        let json = json_of(&p);
-        assert!(
-            json.contains("0.00001000 BTC (unverified: sighash"),
-            "{sighash}: {json}"
-        );
-    }
+fn anyonecanpay_leaves_prev_tx_verified_fees_unverified() {
+    let sighash = EcdsaSighashType::AllPlusAnyoneCanPay;
+    let mut p = p2wpkh_single_sig();
+    p.inputs[0].sighash_type = Some(sighash.into());
+    let json = json_of(&p);
+    assert!(
+        json.contains("unknown (claimed 0.00001000 BTC; unverified: sighash"),
+        "{sighash}: {json}"
+    );
 }
 
 #[test]
@@ -762,7 +752,12 @@ fn explicit_all_and_default_sighashes_keep_taproot_fee_verified() {
     for sighash in [TapSighashType::Default, TapSighashType::All] {
         let mut p = p2tr_single_sig();
         p.inputs[0].sighash_type = Some(sighash.into());
-        assert!(!json_of(&p).contains("BTC (unverified:"));
+        let json = json_of(&p);
+        assert!(!json.contains("unverified:"), "{json}");
+        assert!(
+            json.contains(r#""FallbackText":"0.00001000 BTC","Label":"Fee""#),
+            "{json}"
+        );
     }
 }
 
@@ -836,5 +831,256 @@ fn claimed_input_amount_is_marked_in_preview_subtitle() {
     assert!(
         !verified.contains("claimed amount, unverified"),
         "{verified}"
+    );
+}
+
+// Review regressions: these exercise the public conversion boundary, including
+// rust-bitcoin's otherwise permissive unknown-key and trailing-byte handling.
+#[test]
+fn review_v0_rejects_v2_only_fields() {
+    for ty in 0x02..=0x06 {
+        let mut p = p2wpkh_single_sig();
+        p.unknown.insert(
+            bitcoin::psbt::raw::Key {
+                type_value: ty,
+                key: vec![],
+            },
+            vec![0; 4],
+        );
+        assert!(
+            convert_with(&encode(&p), Network::Bitcoin).is_err(),
+            "global {ty:#x}"
+        );
+    }
+    for ty in 0x0e..=0x12 {
+        let mut p = p2wpkh_single_sig();
+        p.inputs[0].unknown.insert(
+            bitcoin::psbt::raw::Key {
+                type_value: ty,
+                key: vec![],
+            },
+            vec![0; 4],
+        );
+        assert!(
+            convert_with(&encode(&p), Network::Bitcoin).is_err(),
+            "input {ty:#x}"
+        );
+    }
+    for ty in 0x03..=0x04 {
+        let mut p = p2wpkh_single_sig();
+        p.outputs[0].unknown.insert(
+            bitcoin::psbt::raw::Key {
+                type_value: ty,
+                key: vec![],
+            },
+            vec![0; 4],
+        );
+        assert!(
+            convert_with(&encode(&p), Network::Bitcoin).is_err(),
+            "output {ty:#x}"
+        );
+    }
+}
+
+#[test]
+fn review_bip174_zero_input_psbt_has_unknown_fee() {
+    let json = convert_json(&read_input("bip174-zero-inputs"));
+    assert!(json.contains("unknown (input amounts missing)"), "{json}");
+    assert!(json.contains("Output 0"), "{json}");
+}
+
+#[test]
+fn review_duplicate_outpoints_are_rejected() {
+    let mut p = p2wpkh_single_sig();
+    p.unsigned_tx.input.push(p.unsigned_tx.input[0].clone());
+    p.inputs.push(p.inputs[0].clone());
+    let err = convert_with(&encode(&p), Network::Bitcoin)
+        .map(|_| ())
+        .expect_err("invalid PSBT must be rejected");
+    assert!(
+        err.to_string().contains("duplicate input outpoint"),
+        "{err}"
+    );
+}
+
+#[test]
+fn review_unsigned_transaction_size_is_bounded() {
+    let mut p = p2wpkh_single_sig();
+    p.unsigned_tx.output = vec![txout(ScriptBuf::new(), 0); 12_000];
+    p.outputs = vec![Default::default(); 12_000];
+    // Only ~120 KiB of PSBT data, well below the encoded-input cap, but
+    // 432k WU before signatures and tens of thousands of display fields.
+    let err = convert_with(&encode(&p), Network::Bitcoin)
+        .map(|_| ())
+        .expect_err("invalid PSBT must be rejected");
+    assert!(err.to_string().contains("400000 WU"), "{err}");
+}
+
+#[test]
+fn review_money_range_is_enforced_for_values_and_totals() {
+    let max = Amount::MAX_MONEY.to_sat();
+    let mut p = p2wpkh_without_prev_tx();
+    p.inputs[0].witness_utxo.as_mut().unwrap().value = Amount::from_sat(max + 1);
+    assert!(
+        convert_with(&encode(&p), Network::Bitcoin)
+            .map(|_| ())
+            .expect_err("invalid PSBT must be rejected")
+            .to_string()
+            .contains("MAX_MONEY")
+    );
+    let mut p = p2wpkh_single_sig();
+    p.inputs[0].witness_utxo = None;
+    p.inputs[0].non_witness_utxo = None;
+    p.unsigned_tx.output[0].value = Amount::from_sat(max + 1);
+    assert!(
+        convert_with(&encode(&p), Network::Bitcoin)
+            .map(|_| ())
+            .expect_err("invalid PSBT must be rejected")
+            .to_string()
+            .contains("MAX_MONEY")
+    );
+    p.unsigned_tx.output[0].value = Amount::from_sat(max);
+    p.unsigned_tx.output[1].value = Amount::from_sat(1);
+    assert!(
+        convert_with(&encode(&p), Network::Bitcoin)
+            .map(|_| ())
+            .expect_err("invalid PSBT must be rejected")
+            .to_string()
+            .contains("MAX_MONEY")
+    );
+    let mut p = p2wpkh_without_prev_tx();
+    p.inputs[0].witness_utxo.as_mut().unwrap().value = Amount::from_sat(max);
+    p.unsigned_tx.input.push(TxIn {
+        previous_output: OutPoint::new(Txid::all_zeros(), 1),
+        ..p.unsigned_tx.input[0].clone()
+    });
+    p.inputs.push(bitcoin::psbt::Input {
+        witness_utxo: Some(txout(ScriptBuf::new(), 1)),
+        ..Default::default()
+    });
+    assert!(
+        convert_with(&encode(&p), Network::Bitcoin)
+            .map(|_| ())
+            .expect_err("invalid PSBT must be rejected")
+            .to_string()
+            .contains("MAX_MONEY")
+    );
+}
+
+#[test]
+fn review_none_and_single_are_refused_including_legacy_single_bug() {
+    for sighash in [
+        EcdsaSighashType::None,
+        EcdsaSighashType::NonePlusAnyoneCanPay,
+        EcdsaSighashType::Single,
+        EcdsaSighashType::SinglePlusAnyoneCanPay,
+    ] {
+        let mut p = p2wpkh_single_sig();
+        p.inputs[0].sighash_type = Some(sighash.into());
+        assert!(
+            convert_with(&encode(&p), Network::Bitcoin).is_err(),
+            "{sighash}"
+        );
+        let prev = prev_tx(
+            Address::p2pkh(
+                bitcoin::PublicKey::new(pubkey("m/84'/0'/0'/0/0")),
+                Network::Bitcoin,
+            )
+            .script_pubkey(),
+            100_000,
+            11,
+        );
+        p.unsigned_tx.input[0].previous_output = OutPoint::new(prev.compute_txid(), 0);
+        p.inputs[0].witness_utxo = None;
+        p.inputs[0].non_witness_utxo = Some(prev);
+        p.unsigned_tx.output.clear();
+        p.outputs.clear();
+        assert!(
+            convert_with(&encode(&p), Network::Bitcoin).is_err(),
+            "out-of-range {sighash}"
+        );
+    }
+    for sighash in [
+        TapSighashType::None,
+        TapSighashType::NonePlusAnyoneCanPay,
+        TapSighashType::Single,
+        TapSighashType::SinglePlusAnyoneCanPay,
+    ] {
+        let mut p = p2tr_single_sig();
+        p.inputs[0].sighash_type = Some(sighash.into());
+        assert!(
+            convert_with(&encode(&p), Network::Bitcoin).is_err(),
+            "{sighash}"
+        );
+    }
+}
+
+#[test]
+fn review_trailing_bytes_are_rejected() {
+    let encoded = format!("{}00", hex_of(&p2wpkh_single_sig()));
+    assert!(BitcoinTransactionWrapper::from_string(&encoded).is_err());
+}
+
+#[test]
+fn review_arbitrary_derivation_does_not_claim_change() {
+    let mut p = p2wpkh_single_sig();
+    p.outputs[0].bip32_derivation.insert(
+        pubkey("m/84'/0'/99'/0/0"),
+        (Fingerprint::from([1, 2, 3, 4]), path("m/84'/0'/99'/0/0")),
+    );
+    let json = json_of(&p);
+    assert!(!json.contains("claims change"), "{json}");
+    assert!(!json.contains(r#""Label":"Change""#), "{json}");
+}
+
+#[test]
+fn review_claimed_fee_is_unknown_in_primary_display() {
+    let json = json_of(&p2wpkh_without_prev_tx());
+    assert!(json.contains("unknown (claimed 0.00001000 BTC;"), "{json}");
+}
+
+#[test]
+fn review_version_sequence_and_effective_locktime_are_displayed() {
+    let mut p = p2wpkh_single_sig();
+    p.unsigned_tx.lock_time = absolute::LockTime::from_consensus(100);
+    let json = json_of(&p);
+    assert!(
+        json.contains("inactive (all input sequences final)"),
+        "{json}"
+    );
+    assert!(
+        json.contains(r#""FallbackText":"2","Label":"Version""#),
+        "{json}"
+    );
+    assert!(
+        json.contains("0xffffffff (does not signal replaceability; relative lock disabled)"),
+        "{json}"
+    );
+    p.unsigned_tx.input[0].sequence = Sequence::from_consensus(10);
+    let json = json_of(&p);
+    assert!(json.contains("block height 100"), "{json}");
+    assert!(json.contains("signals replaceability"), "{json}");
+    assert!(json.contains("relative lock: 10 blocks"), "{json}");
+    p.unsigned_tx.lock_time = absolute::LockTime::from_consensus(500_000_123);
+    p.unsigned_tx.input[0].sequence = Sequence::from_consensus((1 << 22) | 2);
+    let json = json_of(&p);
+    assert!(json.contains("Unix timestamp 500000123"), "{json}");
+    assert!(json.contains("relative lock: 1024 seconds"), "{json}");
+    p.unsigned_tx.version = transaction::Version::ONE;
+    let json = json_of(&p);
+    assert!(
+        json.contains(r#""FallbackText":"1","Label":"Version""#),
+        "{json}"
+    );
+    assert!(
+        json.contains("relative lock inactive (version < 2)"),
+        "{json}"
+    );
+    p.unsigned_tx.input[0].sequence = Sequence::from_consensus(0xfffffffe);
+    let json = json_of(&p);
+    assert!(json.contains("Unix timestamp 500000123"), "{json}");
+    assert!(
+        json.contains("0xfffffffe (does not signal replaceability; relative lock disabled)"),
+        "{json}"
     );
 }

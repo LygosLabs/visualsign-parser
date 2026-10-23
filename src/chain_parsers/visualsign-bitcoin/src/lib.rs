@@ -1,10 +1,9 @@
 //! Bitcoin PSBT (BIP-174) parser for VisualSign.
 //!
 //! Decodes a base64 or hex PSBT into inputs, outputs and fee. The parser holds
-//! no keys: it cannot tell change from payments, so outputs carrying
-//! derivation data are shown as "claims change (unverified by parser)", and a
-//! fee whose input amounts or sighash commitments cannot be trusted is flagged
-//! as unverified. See [`analysis`] for the exact rules.
+//! no keys: it cannot tell change from payments. A fee whose input amounts or
+//! sighash commitments cannot be trusted is shown as unknown, alongside the
+//! claimed value. See [`analysis`] for the exact rules.
 
 mod analysis;
 #[cfg(feature = "cli-plugin")]
@@ -33,9 +32,6 @@ use visualsign::{AnnotatedPayloadField, SignablePayload};
 /// Upper bound on the encoded input. Real PSBTs with full previous
 /// transactions are well below this.
 const MAX_PSBT_CHARS: usize = 4 * 1024 * 1024;
-
-/// Text shown next to outputs that carry derivation data.
-const CLAIMS_CHANGE: &str = "claims change (unverified by parser)";
 
 /// Parse a network name as accepted by `--bitcoin-network`.
 pub fn parse_network(name: &str) -> Result<Network, String> {
@@ -76,9 +72,16 @@ fn decode_psbt(data: &str) -> Result<Psbt, BitcoinParserError> {
             BitcoinParserError::FailedToDecodeTransaction(format!("Failed to decode base64: {e}"))
         })?,
     };
-    Psbt::deserialize(&bytes).map_err(|e| {
+    let mut remaining = bytes.as_slice();
+    let psbt = Psbt::deserialize_from_reader(&mut remaining).map_err(|e| {
         BitcoinParserError::FailedToDecodeTransaction(format!("Failed to parse PSBT: {e}"))
-    })
+    })?;
+    if !remaining.is_empty() {
+        return Err(BitcoinParserError::FailedToDecodeTransaction(
+            "trailing bytes after PSBT".into(),
+        ));
+    }
+    Ok(psbt)
 }
 
 /// Wrapper for a parsed PSBT.
@@ -161,7 +164,7 @@ fn build_payload(
     )?];
 
     for (i, input) in analysis.inputs.iter().enumerate() {
-        fields.push(input_field(i, input)?);
+        fields.push(input_field(i, input, analysis.version)?);
     }
     for (i, output) in analysis.outputs.iter().enumerate() {
         fields.push(output_field(i, output)?);
@@ -171,15 +174,25 @@ fn build_payload(
         Fee::Verified(fee) => fields.push(create_amount_field("Fee", &btc(*fee), "BTC")?),
         Fee::Unverified { fee, reason } => fields.push(create_text_field(
             "Fee",
-            &format!("{} BTC (unverified: {reason})", btc(*fee)),
+            &format!("unknown (claimed {} BTC; unverified: {reason})", btc(*fee)),
         )?),
         Fee::Unknown => fields.push(create_text_field("Fee", "unknown (input amounts missing)")?),
     }
 
+    fields.push(create_text_field("Version", &analysis.version.to_string())?);
     if analysis.lock_time != 0 {
         fields.push(create_text_field(
             "Lock Time",
-            &analysis.lock_time.to_string(),
+            &if !analysis.lock_time_active {
+                format!(
+                    "{} - inactive (all input sequences final)",
+                    analysis.lock_time
+                )
+            } else if analysis.lock_time < 500_000_000 {
+                format!("block height {}", analysis.lock_time)
+            } else {
+                format!("Unix timestamp {}", analysis.lock_time)
+            },
         )?);
     }
 
@@ -199,11 +212,34 @@ fn build_payload(
     ))
 }
 
-fn input_field(index: usize, input: &InputInfo) -> Result<AnnotatedPayloadField, VisualSignError> {
+fn input_field(
+    index: usize,
+    input: &InputInfo,
+    version: i32,
+) -> Result<AnnotatedPayloadField, VisualSignError> {
     let mut expanded = vec![create_text_field(
         "Outpoint",
         &format!("{}:{}", input.outpoint.txid, input.outpoint.vout),
     )?];
+    let sequence = input.sequence.to_consensus_u32();
+    let rbf = if input.sequence.is_rbf() {
+        "signals replaceability"
+    } else {
+        "does not signal replaceability"
+    };
+    let relative = if !input.sequence.is_relative_lock_time() {
+        "relative lock disabled".to_string()
+    } else if version < 2 {
+        "relative lock inactive (version < 2)".to_string()
+    } else if sequence & (1 << 22) != 0 {
+        format!("relative lock: {} seconds", (sequence & 0xffff) * 512)
+    } else {
+        format!("relative lock: {} blocks", sequence & 0xffff)
+    };
+    expanded.push(create_text_field(
+        "Sequence",
+        &format!("0x{sequence:08x} ({rbf}; {relative})"),
+    )?);
     if let Some(addr) = &input.address {
         expanded.push(create_address_field(
             "Address", addr, None, None, None, None,
@@ -264,17 +300,11 @@ fn output_field(
     expanded.push(create_text_field("Script Type", output.script_type)?);
     expanded.push(create_amount_field("Amount", &btc(output.amount), "BTC")?);
     expanded.extend(script_fields(&output.scripts)?);
-    if output.claims_change {
-        expanded.push(create_text_field("Change", CLAIMS_CHANGE)?);
-    }
     let target = match &output.address {
         Some(addr) => addr.clone(),
         None => format!("script {}", output.script_hex),
     };
-    let mut subtitle = format!("{target} {} BTC", btc(output.amount));
-    if output.claims_change {
-        subtitle.push_str(&format!(" - {CLAIMS_CHANGE}"));
-    }
+    let subtitle = format!("{target} {} BTC", btc(output.amount));
     Ok(create_preview_layout(
         &format!("Output {index}"),
         subtitle,

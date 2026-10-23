@@ -6,6 +6,7 @@ tags: ["Wallet API"]
 ---
 Bitcoin PSBTs (BIP-174, base64 or hex) now decode into VisualSign payloads:
 inputs and amounts, outputs and addresses, and the fee. Fees whose input
-amounts are not bound by a previous transaction are flagged as unverified, and
-outputs carrying derivation data are shown as "claims change (unverified by
-parser)". See [Bitcoin](/chains/bitcoin).
+amounts or commitments cannot be trusted are shown as unknown with a claimed
+amount. Derivation metadata does not label outputs as change. NONE and SINGLE
+sighashes, duplicate inputs, out-of-range amounts, v2-only fields, trailing
+bytes, and unsigned transactions above 400,000 WU are refused. See [Bitcoin](/chains/bitcoin).
