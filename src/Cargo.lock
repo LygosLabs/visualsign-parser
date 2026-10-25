@@ -15043,6 +15043,7 @@ dependencies = [
  "log",
  "num_enum 0.7.5",
  "parser_cli_core",
+ "proptest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
