@@ -12,7 +12,8 @@
 //! - `synthetic-*`: built by this file from the BIP-39 "abandon ... about" seed
 //!   with the BIP-84 / BIP-86 account-0 paths (the keys of the BIP-84 and BIP-86
 //!   test vectors, whose first receive addresses are asserted below). The previous
-//!   transactions are synthetic. `REGEN_FIXTURES=1` rewrites their `.input` files.
+//!   transactions are synthetic. `REGEN_FIXTURES=1` rewrites their `.input` files
+//!   (and the golden test then fails on purpose; check without it).
 
 use base64::Engine as _;
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpriv};
@@ -57,6 +58,16 @@ fn regen() -> bool {
     std::env::var("REGEN_FIXTURES")
         .map(|v| !v.is_empty() && v != "0")
         .unwrap_or(false)
+}
+
+/// After a regeneration run: fail, because nothing was checked. Regenerating
+/// is its own step; a run with `REGEN_FIXTURES` set can never pass as a check.
+fn fail_if_regenerated(what: &str) {
+    assert!(
+        !regen(),
+        "REGEN_FIXTURES is set: {what} rewritten, nothing checked. Review the diff, \
+         then run again without REGEN_FIXTURES."
+    );
 }
 
 fn convert_with(
@@ -419,6 +430,7 @@ fn synthetic_fixtures_are_reproducible() {
         }
         assert_eq!(built, read_input(name), "fixture {name} is stale");
     }
+    fail_if_regenerated("synthetic .input files");
 }
 
 #[test]
@@ -427,8 +439,9 @@ fn test_with_fixtures() {
         let actual = convert_json(&read_input(name));
         let expected_path = fixture_path(&format!("{name}.expected"));
         // `REGEN_FIXTURES=1 cargo test -p visualsign-bitcoin` rewrites every `.expected`
-        // from the current output. Review the diff: an intended change and a regression
-        // look identical here.
+        // from the current output and then fails on purpose. Review the diff (an
+        // intended change and a regression look identical here), then run the
+        // tests again without REGEN_FIXTURES.
         if regen() {
             fs::write(&expected_path, format!("{}\n", actual.trim_end())).unwrap();
             continue;
@@ -437,6 +450,7 @@ fn test_with_fixtures() {
             .unwrap_or_else(|_| panic!("missing {expected_path:?}"));
         assert_eq!(actual.trim(), expected.trim(), "fixture '{name}' differs");
     }
+    fail_if_regenerated(".expected files");
 }
 
 #[test]
