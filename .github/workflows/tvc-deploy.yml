@@ -184,7 +184,7 @@ jobs:
           # Pin the approved turnkey-client version (input -> repo var -> latest).
           VSP_SMOKE_CLIENT_VERSION: ${{ inputs.turnkey_client_version || vars.TVC_SMOKE_CLIENT_VERSION || 'latest' }}
         run: |
-          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           umask 077
           mkdir -p "$HOME/.config/turnkey/keys"
           printf '%s' "$TVC_API_KEY_PUBLIC"       > "$HOME/.config/turnkey/keys/dev.public"
