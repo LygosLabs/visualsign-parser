@@ -11,9 +11,7 @@ on:
   issue_comment:
     types: [created]
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 # Serialize runs: this workflow pushes to the shared `cla-signers-batch` branch
 # and creates/updates a shared batch PR. Two near-simultaneous `/approve-cla`
@@ -29,6 +27,9 @@ jobs:
   add-user-to-cla-list:
     if: github.event.issue.pull_request
     runs-on: ubuntu-26.04
+    permissions:
+      contents: write       # push the cla-signers-batch branch
+      pull-requests: write  # comment on PRs and open the batch PR
     steps:
       - name: Parse command
         id: command_check
