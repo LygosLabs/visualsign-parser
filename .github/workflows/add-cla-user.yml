@@ -67,6 +67,10 @@ jobs:
           echo "author=$AUTHOR" >> "$GITHUB_OUTPUT"
 
       - name: Checkout main branch
+        # Credentials stay persisted on purpose: `Add user to CLA file` runs
+        # `git fetch`/`git push` on cla-signers-batch with this token. No PR
+        # code is checked out (ref: main), and no artifacts are uploaded.
+        # zizmor: ignore[artipacked] batch-branch push below needs the persisted token
         if: steps.command_check.outputs.should_proceed == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
