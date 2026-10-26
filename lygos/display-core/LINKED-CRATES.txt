@@ -1,0 +1,76 @@
+anyhow v1.0.100
+arrayvec v0.7.6
+base58ck v0.1.101
+base64 v0.22.1
+bech32 v0.11.1
+bitcoin v0.32.102
+bitcoin-io v0.1.101
+bitcoin-private v0.1.0
+bitcoin-units v0.1.101
+bitcoin_hashes v0.12.0
+bitcoin_hashes v0.14.101
+block-buffer v0.10.4
+borsh v1.6.0
+borsh-derive v1.6.0 (proc-macro)
+bumpalo v3.19.1
+bytes v1.12.1
+cfg-if v1.0.4
+chrono v0.4.42
+crypto-common v0.1.7
+diff v0.1.13
+digest v0.10.7
+display-core v0.1.0 (path lygos/display-core)
+either v1.15.0
+equivalent v1.0.2
+generated v0.1.0 (path src/generated)
+generic-array v0.14.7
+hashbrown v0.16.1
+hex v0.4.3
+hex-conservative v0.2.2
+hex_lit v0.1.1
+indexmap v2.12.1
+itertools v0.12.1
+itoa v1.0.17
+memchr v2.7.6
+num-traits v0.2.19
+once_cell v1.21.3
+pin-project-lite v0.2.16
+pretty_assertions v1.4.1
+proc-macro-crate v3.4.0
+proc-macro2 v1.0.104
+prost v0.12.6
+prost-derive v0.12.6 (proc-macro)
+prost-types v0.12.6
+qos_hex v0.12.1 (https://github.com/tkhq/qos.git?rev=82d8e18b8875362cdb639f962b6a7f78bd42d320#82d8e18b)
+quote v1.0.42
+regex v1.12.2
+regex-automata v0.4.13
+regex-syntax v0.8.8
+secp256k1 v0.29.1
+secp256k1-sys v0.10.1
+serde v1.0.228
+serde_core v1.0.228
+serde_derive v1.0.228 (proc-macro)
+serde_json v1.0.148
+sha2 v0.10.9
+syn v2.0.112
+thiserror v2.0.17
+thiserror-impl v2.0.17 (proc-macro)
+toml_datetime v0.7.5+spec-1.1.0
+toml_edit v0.23.10+spec-1.0.0
+toml_parser v1.0.6+spec-1.1.0
+tracing v0.1.44
+tracing-attributes v0.1.31 (proc-macro)
+tracing-core v0.1.36
+typenum v1.19.0
+unicode-ident v1.0.22
+visualsign v0.1.0 (path src/visualsign)
+visualsign-bitcoin v0.1.0 (path src/chain_parsers/visualsign-bitcoin)
+visualsign-bitcoin-owned v0.1.0 (path src/chain_parsers/visualsign-bitcoin-owned)
+wasm-bindgen v0.2.106
+wasm-bindgen-macro v0.2.106 (proc-macro)
+wasm-bindgen-macro-support v0.2.106
+wasm-bindgen-shared v0.2.106
+winnow v0.7.14
+yansi v1.0.1
+zmij v1.0.8

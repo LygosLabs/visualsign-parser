@@ -85,13 +85,15 @@ scripts/check-upstream-isolation.sh
 
 step "WebAssembly build, compared with WASM-SHA256"
 mkdir -p "$work"
+# build-wasm.sh itself exits 1 when the hash differs from WASM-SHA256; the
+# compare below is a second, independent check.
 CARGO_BUILD_JOBS="$jobs" nice -n 19 scripts/build-wasm.sh "$work/pkg"
 built=$(sha256sum "$work/pkg/display_core_bg.wasm" | cut -d' ' -f1)
 pinned=$(cut -d' ' -f1 WASM-SHA256)
 [ "$built" = "$pinned" ] || fail "built $built, WASM-SHA256 pins $pinned"
 echo "wasm $built equals WASM-SHA256"
 
-step "only the core and the Bitcoin parser are linked"
+step "display-core links exactly LINKED-CRATES.txt, no other chain"
 scripts/check-chain-deps.sh "$work/pkg/display_core_bg.wasm"
 
 step "goldens through the WebAssembly build"

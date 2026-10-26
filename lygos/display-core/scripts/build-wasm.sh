@@ -3,14 +3,18 @@
 #   cargo (wasm32-unknown-unknown, profile wasm-release)
 #   -> wasm-bindgen --target web -> wasm-opt -Oz
 #
-# Usage: scripts/build-wasm.sh <out-dir> [cargo-target-dir]
+# Usage: scripts/build-wasm.sh [--allow-different] <out-dir> [cargo-target-dir]
 # Writes <out-dir>/display_core.js and <out-dir>/display_core_bg.wasm, prints
-# its sha256 and whether it equals the pinned one in WASM-SHA256.
+# its sha256 and whether it equals the pinned one in WASM-SHA256, and exits 1
+# when it does not. --allow-different (only for producing a new pin after a
+# reviewed source change) prints the same but exits 0.
 #
 # The output is meant to be the same bytes on any machine that has the exact
 # tools below (BUILD.md says where to get them), from any checkout path. So
 # this script:
-# - refuses unless each tool is the exact version it names, and prints each;
+# - refuses unless each tool is the exact version it names, and prints each,
+#   and unless the LLVM libraries clang and llvm-ar load have the pinned
+#   sha256;
 # - refuses if a cargo config file could change the build (config.toml in
 #   CARGO_HOME or in any parent directory's .cargo/);
 # - runs every tool in a cleared environment (env -i): no RUSTFLAGS,
@@ -18,21 +22,29 @@
 #   gets through, only PATH, HOME, CARGO_HOME, RUSTUP_HOME and the flags set
 #   here;
 # - reads the sources through one fixed path, BUILD_ROOT, a symlink to this
-#   checkout in a directory it owns, under a lock. Cargo mixes the absolute
-#   path of every path dependency outside this workspace (the fork's crates
-#   under src/) into that crate's metadata hash, which changes symbol names
-#   and so the order of functions in the .wasm; --remap-path-prefix does not
-#   reach that hash. Do not change BUILD_ROOT: it is part of the output.
+#   checkout (scripts/build-root.sh says who may own its directory and how
+#   several users share it). Cargo mixes the absolute path of every path
+#   dependency outside this workspace (the fork's crates under src/) into that
+#   crate's metadata hash, which changes symbol names and so the order of
+#   functions in the .wasm; --remap-path-prefix does not reach that hash. Do
+#   not change BUILD_ROOT: it is part of the output.
 set -euo pipefail
-
-BUILD_DIR=/tmp/display-core-build
-BUILD_ROOT=$BUILD_DIR/repo
 
 RUSTC_VERSION='rustc 1.94.0 (4a4ef493e 2026-03-02)'
 CLANG_VERSION='Ubuntu clang version 18.1.3 (1ubuntu1)'
 LLVM_AR_VERSION='Ubuntu LLVM version 18.1.3'
 WASM_BINDGEN_VERSION='wasm-bindgen 0.2.106'
 WASM_OPT_VERSION='wasm-opt version 133 (version_133)'
+# The shared libraries clang and llvm-ar load (Ubuntu 24.04 libllvm18 and
+# libclang-cpp18, 1:18.1.3-1ubuntu1), by sha256 of the file behind the name.
+LIBLLVM_SHA256=5c3a63957e28c15cdf1503892074f032d29b72e36a9824a77dfa87e48a0dafb0
+LIBCLANG_CPP_SHA256=b9592746f7f8ff1156680fb1fad5faf5486df7a67aca8327cc959463416c6718
+
+allow_different=false
+if [ "${1:-}" = --allow-different ]; then
+  allow_different=true
+  shift
+fi
 
 crate_dir=$(cd "$(dirname "$0")/.." && pwd -P)
 repo_dir=$(cd "$crate_dir/../.." && pwd -P)
@@ -66,6 +78,20 @@ require_version wasm-bindgen "$WASM_BINDGEN_VERSION" wasm-bindgen --version
 require_version wasm-opt "$WASM_OPT_VERSION" wasm-opt --version
 command -v flock > /dev/null || fail "flock is required"
 
+require_library() { # tool, soname, sha256
+  local path got
+  path=$("${clean_env[@]}" ldd "$("${clean_env[@]}" sh -c "command -v $1")" |
+    awk -v so="$2" '$1 == so { print $3 }')
+  [ -n "$path" ] || fail "$1 does not load $2 (see BUILD.md)"
+  path=$(readlink -f "$path")
+  got=$(sha256sum "$path" | cut -d' ' -f1)
+  echo "library $2 for $1: $path $got"
+  [ "$got" = "$3" ] || fail "$2 loaded by $1 must have sha256 $3 (see BUILD.md)"
+}
+require_library clang libLLVM.so.18.1 "$LIBLLVM_SHA256"
+require_library clang libclang-cpp.so.18.1 "$LIBCLANG_CPP_SHA256"
+require_library llvm-ar libLLVM.so.18.1 "$LIBLLVM_SHA256"
+
 # Cargo reads config files from CARGO_HOME and from every .cargo/ above the
 # working directory; any of them can change profiles or flags.
 for config in "$cargo_home/config" "$cargo_home/config.toml"; do
@@ -80,19 +106,13 @@ while :; do
   dir=$(dirname "$dir")
 done
 
-# BUILD_DIR must be ours and closed to others, or another user could
-# re-point the symlink mid-build.
-mkdir -p -m 700 "$BUILD_DIR"
-[ -O "$BUILD_DIR" ] && [ ! -L "$BUILD_DIR" ] || fail "$BUILD_DIR is not a directory owned by $(id -un)"
-[ "$(stat -c %a "$BUILD_DIR")" = 700 ] || fail "$BUILD_DIR must have mode 700"
-
 mkdir -p "$out_dir" "$target_dir"
 out_dir=$(cd "$out_dir" && pwd -P)
 target_dir=$(cd "$target_dir" && pwd -P)
 
-exec 9>"$BUILD_DIR/lock"
-flock -w 900 9 || fail "another display-core build holds $BUILD_DIR/lock"
-ln -sfn "$repo_dir" "$BUILD_ROOT"
+# shellcheck source=build-root.sh
+. "$crate_dir/scripts/build-root.sh"
+claim_build_root "$repo_dir"
 
 rustflags="--remap-path-prefix=$BUILD_ROOT=/repo --remap-path-prefix=$repo_dir=/repo --remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$target_dir=/target"
 jobs=${CARGO_BUILD_JOBS:-$(nproc)}
@@ -116,4 +136,11 @@ built=$(sha256sum "$out_dir/display_core_bg.wasm" | cut -d' ' -f1)
 pinned=$(cut -d' ' -f1 "$crate_dir/WASM-SHA256" 2>/dev/null || echo none)
 echo "built  $built  $out_dir/display_core_bg.wasm"
 echo "pinned $pinned  (WASM-SHA256)"
-if [ "$built" = "$pinned" ]; then echo "MATCH"; else echo "DIFFERENT from the pin"; fi
+if [ "$built" = "$pinned" ]; then
+  echo "MATCH"
+elif $allow_different; then
+  echo "DIFFERENT from the pin (allowed by --allow-different)"
+else
+  echo "DIFFERENT from the pin"
+  exit 1
+fi

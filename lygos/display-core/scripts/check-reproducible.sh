@@ -30,7 +30,8 @@ for i in $(seq 1 "$count"); do
   for _ in $(seq 1 "$i"); do checkout="$checkout/deeper-$i"; done
   mkdir -p "$checkout"
   git -C "$repo_dir" archive "$commit" | tar -x -C "$checkout"
-  "$checkout/lygos/display-core/scripts/build-wasm.sh" "$work/out-$i" "$work/target-$i" \
+  # --allow-different: this script compares the hashes itself below.
+  "$checkout/lygos/display-core/scripts/build-wasm.sh" --allow-different "$work/out-$i" "$work/target-$i" \
     > "$work/build-$i.log" 2>&1 || {
     echo "FAIL: build $i failed, see $work/build-$i.log" >&2
     exit 1

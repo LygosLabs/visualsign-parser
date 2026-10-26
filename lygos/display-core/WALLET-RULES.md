@@ -18,7 +18,9 @@ protection display-core gives holds only if the caller keeps these rules.
    labels any bare owned script. Labels must match
    `^Your (new )?vault #[0-9]{1,4}$` exactly (for example `Your vault #3` for
    the spent vault and `Your new vault #4` for the change), with a different
-   number on each; anything else refuses the call.
+   number on each; anything else refuses the call. display-core does not tie
+   `new` to inputs or outputs, so the wallet must: never `new` on the vault
+   being spent, always `new` on the fresh change.
 
 3. **Build the PSBT deterministically, with nothing but the previous
    transactions.** Under vault-withdrawal every input carries
