@@ -38,8 +38,8 @@ use visualsign::vsptrait::{
     VisualSignError, VisualSignOptions,
 };
 use visualsign_bitcoin::{
-    BitcoinTransactionWrapper, BitcoinVisualSignConverter, RecognizedScript, ScriptRecognizer,
-    ScriptSource,
+    BitcoinTransactionWrapper, BitcoinVisualSignConverter, RESERVED_LABEL_PREFIXES,
+    RESERVED_LABELS, RecognizedScript, ScriptRecognizer, ScriptSource,
 };
 
 // BIP-39 seed of "abandon abandon abandon abandon abandon abandon abandon abandon
@@ -1450,4 +1450,138 @@ fn recognizer_rows_cannot_reuse_parser_labels() {
         &bare_script_output(),
         vec![Arc::new(twice)]
     )));
+}
+
+#[test]
+fn recognizer_rows_cannot_be_near_copies_of_parser_labels() {
+    // Same words after removing case, spaces and punctuation; a parser label
+    // with something added; or a 4+ character abbreviation of one.
+    let near = [
+        "Fee.",
+        "Fee:",
+        "Fees",
+        "Amount:",
+        "Amount (BTC)",
+        "Recognized  Script",
+        "Script  Type",
+        "Address Encoding.",
+        "Input0",
+        "Cosigner",
+        "Lock-Time",
+        "Sighash",
+        "Out-point",
+        "-- Fee --",
+        "SCRIPT_TYPE",
+    ];
+    for label in near {
+        let r = Recorder::with_fields(
+            bare_multisig_script(),
+            "Toy bare script",
+            vec![(label.into(), "x".into())],
+        );
+        let result = json_with(&bare_script_output(), vec![Arc::new(r)]);
+        assert!(refused(&result), "{label:?}: {result:?}");
+    }
+    // A label with no letters or digits says nothing.
+    for label in ["--", "#", "( )"] {
+        let r = Recorder::with_fields(
+            bare_multisig_script(),
+            "Toy bare script",
+            vec![(label.into(), "x".into())],
+        );
+        assert!(
+            refused(&json_with(&bare_script_output(), vec![Arc::new(r)])),
+            "{label:?}"
+        );
+    }
+    // Words that are not parser labels stay usable.
+    for label in [
+        "Policy",
+        "Recognized By",
+        "Hash Lock",
+        "Vault Index",
+        "Owner",
+    ] {
+        let r = Recorder::with_fields(
+            bare_multisig_script(),
+            "Toy bare script",
+            vec![(label.into(), "x".into())],
+        );
+        assert!(
+            json_with(&bare_script_output(), vec![Arc::new(r)]).is_ok(),
+            "{label:?}"
+        );
+    }
+    // Repeats are compared on the same normalized key.
+    let twice = Recorder::with_fields(
+        bare_multisig_script(),
+        "Toy bare script",
+        vec![
+            ("Hash Lock".into(), "a".into()),
+            ("hash-lock".into(), "b".into()),
+        ],
+    );
+    assert!(refused(&json_with(
+        &bare_script_output(),
+        vec![Arc::new(twice)]
+    )));
+}
+
+/// Every `"Label":"..."` in a payload.
+fn labels_in(json: &str) -> Vec<String> {
+    json.match_indices(r#""Label":""#)
+        .map(|(at, m)| {
+            let rest = &json[at + m.len()..];
+            rest[..rest.find('"').unwrap()].to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn every_label_the_parser_writes_at_runtime_is_reserved() {
+    // Renders that between them reach every label the parser can write,
+    // including labels built at runtime.
+    let mut renders: Vec<String> = VALID_FIXTURES
+        .iter()
+        .map(|name| convert_json(&read_input(name)))
+        .collect();
+    let mut acp = p2wpkh_single_sig();
+    acp.inputs[0].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::AllPlusAnyoneCanPay));
+    renders.push(json_of(&acp));
+    let mut locked = p2wpkh_single_sig();
+    locked.unsigned_tx.lock_time = absolute::LockTime::from_consensus(100);
+    locked.unsigned_tx.input[0].sequence = Sequence::from_consensus(10);
+    renders.push(json_of(&locked));
+    let mut unbound = p2wpkh_single_sig();
+    unbound.inputs[0].witness_script = Some(ScriptBuf::from_hex("5121").unwrap());
+    renders.push(json_of(&unbound));
+    renders.push(json_of(&bare_script_input()));
+    // A recognizer with no rows of its own: every label is the parser's.
+    renders.push(json_with(&bare_script_output(), vec![Arc::new(NamesEverything)]).unwrap());
+
+    let mut seen = std::collections::BTreeSet::new();
+    for json in &renders {
+        for label in labels_in(json) {
+            let numbered = RESERVED_LABEL_PREFIXES.iter().find_map(|p| {
+                label
+                    .strip_prefix(p)
+                    .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                    .map(|_| (*p).to_string())
+            });
+            match numbered {
+                Some(prefix) => seen.insert(prefix),
+                None => {
+                    assert!(
+                        RESERVED_LABELS.contains(&label.as_str()),
+                        "parser wrote {label:?}, which is not reserved"
+                    );
+                    seen.insert(label)
+                }
+            };
+        }
+    }
+    // And the reserved list holds nothing the parser never writes.
+    for reserved in RESERVED_LABELS.iter().chain(RESERVED_LABEL_PREFIXES) {
+        assert!(seen.contains(*reserved), "{reserved:?} never written");
+    }
 }

@@ -71,10 +71,12 @@ pub enum ScriptSource {
 /// [`ScriptRecognizer`]. The parser checks it as soon as it is returned and
 /// fails the conversion if any text is empty, longer than
 /// [`MAX_RECOGNIZED_TEXT`] bytes or not printable ASCII, if there are more than
-/// [`MAX_RECOGNIZED_FIELDS`] rows, or if a row label repeats another row's or
-/// is one the parser itself writes ([`RESERVED_LABELS`],
-/// [`RESERVED_LABEL_PREFIXES`]; compared ignoring ASCII case and surrounding
-/// spaces).
+/// [`MAX_RECOGNIZED_FIELDS`] rows, or if a row label could pass for another
+/// row's or for one the parser itself writes ([`RESERVED_LABELS`],
+/// [`RESERVED_LABEL_PREFIXES`]). Labels are compared on their letters and
+/// digits only, ignoring ASCII case: a row label is refused when that key is
+/// empty, repeats another row's key, equals or extends a parser label's key,
+/// or is an abbreviation (4+ characters) of one.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RecognizedScript {
     pub name: String,
@@ -160,16 +162,26 @@ fn check_text(what: &str, text: &str) -> Result<(), BitcoinParserError> {
 }
 
 /// `label` with surrounding spaces removed and ASCII letters lowered.
+/// `label`'s ASCII letters and digits, lowered: what a reader compares.
 fn label_key(label: &str) -> String {
-    label.trim().to_ascii_lowercase()
+    label
+        .bytes()
+        .filter(u8::is_ascii_alphanumeric)
+        .map(|b| char::from(b.to_ascii_lowercase()))
+        .collect()
 }
 
-fn is_reserved(label: &str) -> bool {
-    let key = label_key(label);
-    RESERVED_LABELS.iter().any(|r| key == label_key(r))
-        || RESERVED_LABEL_PREFIXES
-            .iter()
-            .any(|p| key.starts_with(&p.to_ascii_lowercase()))
+/// Shortest key that counts as an abbreviation of a parser label.
+const MIN_ABBREVIATION: usize = 4;
+
+/// `key` equals a parser label's key, extends it, or abbreviates it.
+fn is_reserved(key: &str) -> bool {
+    RESERVED_LABELS.iter().any(|r| {
+        let reserved = label_key(r);
+        key.starts_with(&reserved) || (key.len() >= MIN_ABBREVIATION && reserved.starts_with(key))
+    }) || RESERVED_LABEL_PREFIXES
+        .iter()
+        .any(|p| key.starts_with(&label_key(p)))
 }
 
 fn check_recognized(recognized: &RecognizedScript) -> Result<(), BitcoinParserError> {
@@ -181,12 +193,18 @@ fn check_recognized(recognized: &RecognizedScript) -> Result<(), BitcoinParserEr
     for (label, value) in &recognized.fields {
         check_text("row label", label)?;
         check_text("row value", value)?;
-        if is_reserved(label) {
+        let key = label_key(label);
+        if key.is_empty() {
             return Err(rejected(format!(
-                "row label '{label}' is one the parser writes"
+                "row label '{label}' has no letters or digits"
             )));
         }
-        if !seen.insert(label_key(label)) {
+        if is_reserved(&key) {
+            return Err(rejected(format!(
+                "row label '{label}' could pass for one the parser writes"
+            )));
+        }
+        if !seen.insert(key) {
             return Err(rejected(format!("row label '{label}' repeats")));
         }
     }

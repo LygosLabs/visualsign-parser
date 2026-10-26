@@ -399,30 +399,56 @@ fn script_fields(
 mod tests {
     use super::scripts::{RESERVED_LABEL_PREFIXES, RESERVED_LABELS};
 
-    /// Every label literal this file writes, read from the source itself, must
-    /// be reserved, so the reserved list cannot drift from the code.
+    /// Every label this file writes, read from the source itself, must be a
+    /// reserved literal or a reserved numbered prefix, so the reserved list
+    /// cannot drift from the code. Any other label expression (built at
+    /// runtime) is counted and pinned: the only one is the recognizer's own
+    /// row label, which `scripts::recognize` checks. The integration test
+    /// `every_label_the_parser_writes_at_runtime_is_reserved` checks the
+    /// rendered output as well.
     #[test]
     fn every_label_the_parser_writes_is_reserved() {
         let src = include_str!("lib.rs");
         let body = &src[..src.find("#[cfg(test)]").unwrap()];
-        let mut found = 0;
-        for call in ["_field(", "create_preview_layout("] {
-            for (at, _) in body.match_indices(call) {
-                let rest = body[at + call.len()..].trim_start();
-                if let Some(lit) = rest.strip_prefix('"') {
-                    let label = &lit[..lit.find('"').unwrap()];
-                    assert!(RESERVED_LABELS.contains(&label), "{label:?} not reserved");
-                    found += 1;
-                } else if let Some(lit) = rest.strip_prefix("&format!(\"") {
-                    let prefix = &lit[..lit.find('{').unwrap()];
-                    assert!(
-                        RESERVED_LABEL_PREFIXES.contains(&prefix),
-                        "{prefix:?} not a reserved prefix"
-                    );
-                    found += 1;
-                }
+        let (mut literal, mut numbered, mut other) = (0, 0, Vec::new());
+        // Every call of a visualsign field builder: `create_*_field(` or
+        // `create_preview_layout(`.
+        for (at, _) in body.match_indices("create_") {
+            let ident: String = body[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let Some(rest) = body[at + ident.len()..].strip_prefix('(') else {
+                continue;
+            };
+            if !(ident.ends_with("_field") || ident == "create_preview_layout") {
+                continue;
+            }
+            let rest = rest.trim_start();
+            if let Some(lit) = rest.strip_prefix('"') {
+                let label = &lit[..lit.find('"').unwrap()];
+                assert!(RESERVED_LABELS.contains(&label), "{label:?} not reserved");
+                literal += 1;
+            } else if let Some(lit) = rest.strip_prefix("&format!(\"") {
+                let prefix = &lit[..lit.find('{').unwrap()];
+                assert!(
+                    RESERVED_LABEL_PREFIXES.contains(&prefix),
+                    "{prefix:?} not a reserved prefix"
+                );
+                numbered += 1;
+            } else {
+                other.push(rest.split([',', ')']).next().unwrap().trim().to_string());
             }
         }
-        assert!(found >= 20, "only {found} labels found");
+        assert_eq!((literal, numbered), (LITERAL_SITES, NUMBERED_SITES));
+        assert_eq!(
+            other,
+            vec!["label".to_string()],
+            "unchecked label expressions"
+        );
     }
+
+    /// Label call sites in lib.rs, pinned so none can stop being checked.
+    const LITERAL_SITES: usize = 25;
+    const NUMBERED_SITES: usize = 3;
 }
