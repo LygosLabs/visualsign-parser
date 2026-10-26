@@ -20,11 +20,16 @@
 //! [`Policy::VaultWithdrawal`] refuses the whole display unless every input is
 //! verified through its previous transaction, every input and output script
 //! is a standard address type or owned, no output pays a bare script that an
-//! input spends, and every input asks for SIGHASH_ALL (or nothing).
+//! input spends, every input asks for SIGHASH_ALL (or nothing), no two inputs
+//! spend the same outpoint, no owned script is an OP_RETURN or a witness
+//! program, and the PSBT carries nothing that is unsigned and unneeded: inputs
+//! hold only `non_witness_utxo`, a matching `witness_utxo` and `sighash_type`,
+//! and outputs hold no fields at all.
 
-use bitcoin::psbt::{Psbt, PsbtSighashType};
+use bitcoin::psbt::{Input, Output, Psbt, PsbtSighashType};
 use bitcoin::{Address, EcdsaSighashType, Network, Script, ScriptBuf, TapSighashType};
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 use visualsign::SignablePayload;
@@ -86,6 +91,16 @@ pub enum Refusal {
     OwnedScriptHasAddress,
     /// Two owned scripts have the same label (ignoring ASCII case).
     DuplicateLabel,
+    /// Vault withdrawal: an owned script is an OP_RETURN or a witness program,
+    /// which no vault is.
+    OwnedScriptNotVault,
+    /// Vault withdrawal: an input or output carries a PSBT field that is
+    /// neither signed nor needed (only `non_witness_utxo`, a matching
+    /// `witness_utxo` and `sighash_type` are allowed on inputs; nothing on
+    /// outputs).
+    UnsignedPsbtField,
+    /// Vault withdrawal: two inputs spend the same outpoint.
+    DuplicateInput,
 }
 
 impl Refusal {
@@ -105,6 +120,9 @@ impl Refusal {
             Self::UnsupportedSighash => "unsupported-sighash",
             Self::OwnedScriptHasAddress => "owned-script-has-address",
             Self::DuplicateLabel => "duplicate-label",
+            Self::OwnedScriptNotVault => "owned-script-not-vault",
+            Self::UnsignedPsbtField => "unsigned-psbt-field",
+            Self::DuplicateInput => "duplicate-input",
         }
     }
 }
@@ -182,6 +200,10 @@ impl OwnedScripts {
             out.push((script, label));
         }
         Ok(Self { entries: out })
+    }
+
+    fn scripts(&self) -> impl Iterator<Item = &Script> {
+        self.entries.iter().map(|(s, _)| s.as_script())
     }
 
     /// The label of the owned script whose bytes equal `script`.
@@ -303,10 +325,20 @@ fn check_vault_withdrawal(psbt: &Psbt, owned: &OwnedScripts) -> Result<(), Refus
     if tx.input.len() != psbt.inputs.len() || tx.output.len() != psbt.outputs.len() {
         return Err(Refusal::Rejected);
     }
+    if owned
+        .scripts()
+        .any(|s| s.is_op_return() || s.is_witness_program())
+    {
+        return Err(Refusal::OwnedScriptNotVault);
+    }
     let all = PsbtSighashType::from(EcdsaSighashType::All);
     let default = PsbtSighashType::from(TapSighashType::Default);
     let mut spent_bare: Vec<&Script> = Vec::with_capacity(tx.input.len());
+    let mut outpoints = BTreeSet::new();
     for (txin, input) in tx.input.iter().zip(&psbt.inputs) {
+        if !outpoints.insert(txin.previous_output) {
+            return Err(Refusal::DuplicateInput);
+        }
         let prev = input
             .non_witness_utxo
             .as_ref()
@@ -321,10 +353,16 @@ fn check_vault_withdrawal(psbt: &Psbt, owned: &OwnedScripts) -> Result<(), Refus
         if input.sighash_type.is_some_and(|t| t != all && t != default) {
             return Err(Refusal::UnsupportedSighash);
         }
+        if *input != signed_or_needed_only(input) {
+            return Err(Refusal::UnsignedPsbtField);
+        }
         address_type_or_owned(&prevout.script_pubkey, owned)?;
         if !is_address_type(&prevout.script_pubkey) {
             spent_bare.push(prevout.script_pubkey.as_script());
         }
+    }
+    if psbt.outputs.iter().any(|o| *o != Output::default()) {
+        return Err(Refusal::UnsignedPsbtField);
     }
     for out in &tx.output {
         address_type_or_owned(&out.script_pubkey, owned)?;
@@ -333,4 +371,16 @@ fn check_vault_withdrawal(psbt: &Psbt, owned: &OwnedScripts) -> Result<(), Refus
         }
     }
     Ok(())
+}
+
+/// `input` with every field dropped except the previous transaction, its
+/// `witness_utxo` copy (the parser refuses one that disagrees) and the sighash
+/// type (already limited to ALL / DEFAULT).
+fn signed_or_needed_only(input: &Input) -> Input {
+    Input {
+        non_witness_utxo: input.non_witness_utxo.clone(),
+        witness_utxo: input.witness_utxo.clone(),
+        sighash_type: input.sighash_type,
+        ..Input::default()
+    }
 }

@@ -20,10 +20,13 @@
 //! rewrites this crate's `.input`, `.expected`, `shapes.json` and
 //! `qsb-synthetic-vault-1.script` files.
 
+use bitcoin::bip32::{DerivationPath, Fingerprint};
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::{Hash, hash160};
+use bitcoin::psbt::raw;
 use bitcoin::psbt::{Psbt, PsbtSighashType};
 use bitcoin::script::Instruction;
+use bitcoin::secp256k1::{PublicKey, XOnlyPublicKey};
 use bitcoin::{
     Amount, EcdsaSighashType, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
     Witness, absolute,
@@ -31,6 +34,7 @@ use bitcoin::{
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use visualsign_bitcoin_owned::{OwnedScripts, Policy, Refusal, display};
 
 const FUNDING_TXID: &str = "3a002c9dd08e243ed430f017fd98d5b9ede1d98642f2b406ff65fc90c3551aac";
@@ -946,5 +950,137 @@ fn labels_must_start_with_your() {
     assert_eq!(
         run(&psbt, mixed, Policy::None, Network::Regtest),
         "refused: bad-label"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Vault withdrawal: nothing rendered that is not signed or verified
+// ---------------------------------------------------------------------------
+
+const G: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+
+type Tamper = fn(&mut Psbt);
+
+fn tampers() -> Vec<(&'static str, Tamper)> {
+    vec![
+        ("vault input witness_script", |p| {
+            p.inputs[1].witness_script = Some(ScriptBuf::from_bytes(vec![0x51]));
+        }),
+        ("vault input redeem_script", |p| {
+            p.inputs[1].redeem_script = Some(ScriptBuf::from_bytes(vec![0x51]));
+        }),
+        ("helper input final_script_sig", |p| {
+            p.inputs[0].final_script_sig = Some(ScriptBuf::from_bytes(vec![0x00]));
+        }),
+        ("helper input final_script_witness", |p| {
+            p.inputs[0].final_script_witness = Some(Witness::from_slice(&[vec![1u8]]));
+        }),
+        ("vault input tap_internal_key", |p| {
+            p.inputs[1].tap_internal_key = Some(XOnlyPublicKey::from_str(&G[2..]).unwrap());
+        }),
+        ("helper input bip32_derivation", |p| {
+            p.inputs[0].bip32_derivation.insert(
+                PublicKey::from_str(G).unwrap(),
+                (Fingerprint::default(), DerivationPath::master()),
+            );
+        }),
+        ("helper input unknown key", |p| {
+            p.inputs[0].unknown.insert(
+                raw::Key {
+                    type_value: 0x50,
+                    key: vec![1],
+                },
+                b"Your vault #7".to_vec(),
+            );
+        }),
+        ("output witness_script", |p| {
+            p.outputs[0].witness_script = Some(ScriptBuf::from_bytes(vec![0x51]));
+        }),
+        ("output bip32_derivation", |p| {
+            p.outputs[0].bip32_derivation.insert(
+                PublicKey::from_str(G).unwrap(),
+                (Fingerprint::default(), DerivationPath::master()),
+            );
+        }),
+        ("output tap_internal_key", |p| {
+            p.outputs[0].tap_internal_key = Some(XOnlyPublicKey::from_str(&G[2..]).unwrap());
+        }),
+    ]
+}
+
+#[test]
+fn vault_withdrawal_refuses_psbt_fields_that_are_not_signed() {
+    for (what, tamper) in tampers() {
+        let mut p = real_helper_whole_vault();
+        tamper(&mut p);
+        assert_eq!(
+            run(
+                &psbt_hex(&p),
+                owned_vault0(),
+                Policy::VaultWithdrawal,
+                Network::Regtest
+            ),
+            "refused: unsigned-psbt-field",
+            "{what}"
+        );
+    }
+    // A witness_utxo that agrees with the previous transaction and an
+    // explicit ALL are allowed.
+    let mut p = real_helper_whole_vault();
+    p.inputs[0].witness_utxo = Some(funding().output[1].clone());
+    p.inputs[1].sighash_type = Some(PsbtSighashType::from(EcdsaSighashType::All));
+    assert!(
+        !run(
+            &psbt_hex(&p),
+            owned_vault0(),
+            Policy::VaultWithdrawal,
+            Network::Regtest
+        )
+        .starts_with("refused")
+    );
+}
+
+#[test]
+fn vault_withdrawal_refuses_an_owned_op_return() {
+    let memo = ScriptBuf::from_bytes(vec![0x6a, 0x04, 0xde, 0xad, 0xbe, 0xef]);
+    let mut p = helper_free_whole_vault();
+    p.unsigned_tx.output.push(txout(memo.clone(), 0));
+    p.outputs.push(Default::default());
+    let owned = vec![entry(&vault0(), "Your vault #0"), entry(&memo, "Your memo")];
+    let psbt = psbt_hex(&p);
+    assert_eq!(
+        run(
+            &psbt,
+            owned.clone(),
+            Policy::VaultWithdrawal,
+            Network::Regtest
+        ),
+        "refused: owned-script-not-vault"
+    );
+    // Under none it is a bare script like any other.
+    assert!(run(&psbt, owned, Policy::None, Network::Regtest).contains("Your memo"));
+}
+
+#[test]
+fn vault_withdrawal_refuses_a_duplicated_input_itself() {
+    let mut p = real_helper_whole_vault();
+    let dup = p.unsigned_tx.input[0].clone();
+    p.unsigned_tx.input.push(dup);
+    p.inputs.push(p.inputs[0].clone());
+    // Keep the amounts balanced so only the duplicate is wrong.
+    p.unsigned_tx.output[0].value = Amount::from_sat(19_999_810_000);
+    let psbt = psbt_hex(&p);
+    assert_eq!(
+        run(
+            &psbt,
+            owned_vault0(),
+            Policy::VaultWithdrawal,
+            Network::Regtest
+        ),
+        "refused: duplicate-input"
+    );
+    assert_eq!(
+        run(&psbt, owned_vault0(), Policy::None, Network::Regtest),
+        "refused: psbt-rejected"
     );
 }
