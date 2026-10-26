@@ -110,18 +110,16 @@ Only after a reviewed source change, to produce the new pin:
   exists, because those can set flags or profiles.
 - **Build path.** Sources are read through the fixed path
   `/tmp/display-core-build/repo`, a symlink the script points at your
-  checkout for the length of one build and removes afterwards. Do not change
-  this path: it is part of the output (cargo hashes path dependencies outside
-  the workspace by absolute path). `/tmp/display-core-build` must be either
-  yours with mode 700 (the script creates it so if it is missing) or root's
-  with mode 1777. On a machine several users share, create it once as root so
-  nobody blocks anybody:
-
-  ```
-  sudo install -d -m 1777 /tmp/display-core-build
-  ```
-
-  A directory owned by another user is refused, because its owner could
-  re-point your symlink. Builds take turns through a lock in that directory.
+  checkout. Do not change this path: it is part of the output (cargo hashes
+  path dependencies outside the workspace by absolute path).
+  `/tmp/display-core-build` exists only while a build runs: the script
+  creates it as yours with mode 700 (so nobody else can re-point the
+  symlink) and removes it when the build exits. On a machine several users
+  share, a second user's build waits (up to 15 minutes) while another user's
+  build holds it, then takes its turn; no administrator or world-writable
+  directory is needed. Builds by the same user take turns through a lock in
+  that directory. A directory left behind by another user's crashed build
+  makes the wait time out with an error naming its owner; that user (or an
+  administrator) removes it.
 - **Checkout path, cargo home, target dir, job count.** These do not change
   the bytes (tested).
