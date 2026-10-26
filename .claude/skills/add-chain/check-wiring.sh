@@ -9,6 +9,9 @@
 #
 # Prints one line per check: OK, MISSING, or INFO (a policy choice, not an
 # error). Exits 1 if anything is MISSING. Never writes a file.
+#
+# CHECK_WIRING_FORMAT=markdown prints the same checks as a GitHub task list,
+# for tracking-issue.sh.
 set -u
 
 chain="${1:?usage: check-wiring.sh <chain> [RustVariant]}"
@@ -19,9 +22,18 @@ root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)" || exit 2
 cd "$root" || exit 2
 
 missing=0
-ok()   { printf '  OK       %s\n' "$1"; }
-miss() { printf '  MISSING  %s\n' "$1"; missing=$((missing + 1)); }
-info() { printf '  INFO     %s\n' "$1"; }
+total=0
+if [ "${CHECK_WIRING_FORMAT:-text}" = markdown ]; then
+  ok()      { printf -- '- [x] %s\n' "$1"; total=$((total + 1)); }
+  miss()    { printf -- '- [ ] %s\n' "$1"; missing=$((missing + 1)); total=$((total + 1)); }
+  info()    { printf -- '- %s\n' "$1"; }
+  section() { printf '\n**%s**\n\n' "$1"; }
+else
+  ok()      { printf '  OK       %s\n' "$1"; total=$((total + 1)); }
+  miss()    { printf '  MISSING  %s\n' "$1"; missing=$((missing + 1)); total=$((total + 1)); }
+  info()    { printf '  INFO     %s\n' "$1"; }
+  section() { printf '%s\n' "$1"; }
+fi
 # check <description> <file> <extended regex>
 check() {
   if [ -f "$2" ] && grep -Eq -- "$3" "$2"; then ok "$1"; else miss "$1 ($2)"; fi
@@ -35,28 +47,30 @@ cargo_default() {
 chain_features_arg() { sed -n 's/^ARG CHAIN_FEATURES="\(.*\)"/\1/p' "$1" | norm; }
 
 crate="src/chain_parsers/visualsign-$chain"
-echo "Wiring for chain '$chain' (variant $variant, proto CHAIN_$upper)"
+if [ "${CHECK_WIRING_FORMAT:-text}" != markdown ]; then
+  echo "Wiring for chain '$chain' (variant $variant, proto CHAIN_$upper)"
+fi
 
-echo "Crate"
+section "Crate"
 if [ -d "$crate" ]; then ok "$crate exists"; else miss "$crate exists"; fi
 check "crate default = [\"cli-plugin\"]" "$crate/Cargo.toml" '^default *= *\["cli-plugin"\]'
 check "crate [lints] workspace = true" "$crate/Cargo.toml" '^workspace *= *true'
 check "workspace member" src/Cargo.toml "\"chain_parsers/visualsign-$chain\""
 
-echo "Proto and core enum"
+section "Proto and core enum"
 check "proto CHAIN_$upper slot" proto/parser/parser.proto "CHAIN_$upper *= *[0-9]+;"
 check "generated code regenerated" src/generated/src/generated/parser.rs "\"CHAIN_$upper\""
 check "registry Chain::$variant" src/visualsign/src/registry.rs "Chain::$variant => \"$variant\""
 check "registry FromStr \"$chain\"" src/visualsign/src/registry.rs "\"$chain\" => Chain::$variant"
 check "chain_conversion proto->registry" src/parser/app/src/chain_conversion.rs "ProtoChain::$variant => RegistryChain::$variant"
 
-echo "parser_app / http-server"
+section "parser_app / http-server"
 check "parser_app feature" src/parser/app/Cargo.toml "^$chain *= *\[\"dep:visualsign-$chain\"\]"
 check "parser_app registers converter" src/parser/app/src/registry.rs "feature = \"$chain\""
 check "parser_app registry test" src/parser/app/src/registry.rs "convert_transaction\(&(visualsign::registry::)?Chain::$variant"
 check "http-server feature" src/parser/http-server/Cargo.toml "^$chain *= *\[\"parser_app/$chain\"\]"
 
-echo "Default set: parser_app default == http-server default == every CHAIN_FEATURES"
+section "Default set: parser_app default == http-server default == every CHAIN_FEATURES"
 app_default="$(cargo_default src/parser/app/Cargo.toml)"
 if printf '%s\n' "$app_default" | grep -qx "$chain"; then
   info "$chain is DEFAULT-ON in parser_app (state this in the PR)"
@@ -74,7 +88,7 @@ for f in images/parser_app/Containerfile images/parser_http_server/Containerfile
   same "$f CHAIN_FEATURES" "$(chain_features_arg "$f")"
 done
 
-echo "parser_cli"
+section "parser_cli"
 check "parser_cli feature" src/parser/cli/Cargo.toml "^$chain *= *\[\"dep:visualsign-$chain\""
 check "parser_cli main.rs plugin" src/parser/cli/src/main.rs "visualsign_$snake::"
 check "cli-core chains.rs mapping" src/parser/cli-core/src/chains.rs "\"$chain\", *Chain::$variant"
@@ -87,7 +101,7 @@ else
   miss "parser_cli fixture (src/parser/cli/tests/fixtures/$chain-*.input)"
 fi
 
-echo "Repo metadata and docs"
+section "Repo metadata and docs"
 check "labeler chain:$chain" .github/labeler.yml "^\"chain:$chain\":"
 check "CODEOWNERS entry" .github/CODEOWNERS "^/src/chain_parsers/visualsign-$chain/ "
 check "docs/chains/$chain.mdx" "docs/chains/$chain.mdx" '.'
@@ -114,5 +128,5 @@ else
 fi
 
 echo
-if [ "$missing" -gt 0 ]; then echo "$missing touch point(s) missing"; exit 1; fi
-echo "all touch points present"
+if [ "$missing" -gt 0 ]; then echo "$((total - missing))/$total touch points present, $missing missing"; exit 1; fi
+echo "$total/$total touch points present"

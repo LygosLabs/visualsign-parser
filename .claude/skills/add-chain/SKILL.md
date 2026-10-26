@@ -1,6 +1,6 @@
 ---
 name: add-chain
-description: Add a new chain parser crate (visualsign-<chain>) and wire it into every place a chain must appear - proto, registry, parser_app, http-server, images, parser_cli, tests, CI metadata and docs. Covers the policy decisions the PR must state, the safety rules for untrusted input, the test standard, and the exact verify commands. Includes a read-only check-wiring.sh that reports every missing touch point.
+description: Add a new chain parser crate (visualsign-<chain>) and wire it into every place a chain must appear - proto, registry, parser_app, http-server, images, parser_cli, tests, CI metadata and docs. Covers the policy decisions the PR must state, the safety rules for untrusted input, the test standard, and the exact verify commands. Includes a read-only check-wiring.sh that reports every missing touch point, and tracking-issue.sh, which opens and refreshes a per-chain GitHub issue with milestone checklists (M0 scope to M6 production) so support completeness is visible.
 user-invocable: true
 ---
 
@@ -25,6 +25,35 @@ Follow this skill, not that page.
    (`visualsign-near`, local wire types + oracle) are the current reference shapes.
 2. Claim a proto slot (see [wiring.md](wiring.md) step 3). Check open PRs first.
 3. Decide the three policies below and write them into the PR description draft now.
+4. Open the chain's tracking issue (see [Tracking issue](#tracking-issue)), unless one exists:
+   `gh issue list --search "Chain support: <Variant> in:title"`.
+
+## Tracking issue
+
+Every chain has one GitHub issue, "Chain support: `<Variant>`", that records how complete
+its support is. `tracking-issue.sh` writes it as task lists, one per milestone, so GitHub
+shows progress on the issue and wherever it's linked:
+
+| Milestone | Contents | Ticked by |
+|---|---|---|
+| M0 Scope and policy | proto slot, default-on/opt-in, network trust, C deps, vector sources | hand |
+| M1 Wiring | every touch point from `check-wiring.sh`, generated from the repo | the script |
+| M2 Parser safety and tests | one box per safety rule and per required test (Step 3) | hand |
+| M3 Property tests | proptest file, CI label run, regressions file | hand |
+| M4 Fuzzing | cargo-fuzz target, CI label run, seeded corpus | hand |
+| M5 iOS (C-free) | no `cc` for `aarch64-apple-ios`, `APPLE_NO_C_CRATES` | hand |
+| M6 Production | downstream integration, default-on, changelog published | hand |
+
+```bash
+.claude/skills/add-chain/tracking-issue.sh <chain>                 # print the body (dry run)
+.claude/skills/add-chain/tracking-issue.sh <chain> --create        # open it, labelled chain:<chain> if that label exists
+.claude/skills/add-chain/tracking-issue.sh <chain> --update <n>    # regenerate M1 only; hand ticks elsewhere are kept
+```
+
+Refresh M1 with `--update` after each wiring change and before asking for review. A milestone
+that doesn't apply gets its boxes struck through with the reason (`- [x] ~~...~~ n/a: why`),
+never deleted, so "complete" always means every box was considered. Link each chain PR from
+the issue's Links section and reference the issue in the PR body.
 
 ## Policy decisions the PR must state
 
@@ -114,7 +143,7 @@ Required in the chain PR:
   library call it uses internally is a mapping test, not an oracle; say so.
 - **End-to-end:** a parser_app registry test and a parser_cli fixture (wiring.md 8 and 15).
 
-Allowed as a tracked follow-up (open the issue and link it in the PR):
+Allowed as a follow-up, tracked by the M3 and M4 boxes in the chain's tracking issue:
 
 - `tests/proptest_<chain>.rs` (proptest dev-dependency) and a cargo-fuzz crate at
   `visualsign-<chain>/fuzz/` with at least one `fuzz_transaction_string` target, modelled
@@ -136,6 +165,7 @@ make -C src unused-deps                            # needs cargo-machete 0.9.2
 make -C src apple-silicon-check                    # only if it exists (PR #587); macOS host
 make -C src feature-matrix-check                   # local only, slow; run once before review
 .claude/skills/add-chain/check-wiring.sh <chain>
+.claude/skills/add-chain/tracking-issue.sh <chain> --update <issue>   # M1 now matches the branch
 ```
 
 Then decode a real vector through the CLI from `src/`:
@@ -167,5 +197,5 @@ Review both diffs yourself before Step 4. Don't let either agent change proto sl
 - Proto slot number and the open PRs you checked
 - Amplification ratio and the caps chosen
 - Vector provenance list; oracle used (or why none)
-- Follow-up issue for proptest + fuzz if not in this PR
+- Tracking issue link (`Tracks #<n>`); M3/M4 boxes stay open there if proptest + fuzz aren't in this PR
 - `check-wiring.sh <chain>` output
