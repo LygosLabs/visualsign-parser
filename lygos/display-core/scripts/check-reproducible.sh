@@ -2,7 +2,8 @@
 # Proves build-wasm.sh gives the same bytes whatever the checkout path:
 # exports the committed tree (git archive HEAD) to <count> different absolute
 # paths of different depths under <work-dir>, builds each into its own empty
-# target dir, and requires a single sha256 for display_core_bg.wasm.
+# target dir, and requires a single sha256 for display_core_bg.wasm that also
+# equals the pinned one in the committed WASM-SHA256.
 #
 # Usage: scripts/check-reproducible.sh <empty-work-dir> [count, default 3]
 set -euo pipefail
@@ -43,4 +44,9 @@ if [ "$(printf '%s\n' "${hashes[@]}" | sort -u | wc -l)" -ne 1 ]; then
   echo "FAIL: builds differ" >&2
   exit 1
 fi
-echo "OK: $count builds of $commit from different paths, one sha256 ${hashes[0]}"
+pinned=$(git -C "$repo_dir" show "$commit:lygos/display-core/WASM-SHA256" | cut -d' ' -f1)
+if [ "${hashes[0]}" != "$pinned" ]; then
+  echo "FAIL: builds agree on ${hashes[0]} but WASM-SHA256 at $commit pins $pinned" >&2
+  exit 1
+fi
+echo "OK: $count builds of $commit from different paths, one sha256 ${hashes[0]}, equal to WASM-SHA256"
