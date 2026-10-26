@@ -1,0 +1,153 @@
+[
+  {
+    "name": "qsb-real-helper-whole-vault",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "vault-withdrawal"
+  },
+  {
+    "name": "qsb-synthetic-partial-with-change",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      },
+      {
+        "label": "Your new vault #1",
+        "scriptFile": "qsb-synthetic-vault-1.script"
+      }
+    ],
+    "policy": "vault-withdrawal"
+  },
+  {
+    "name": "qsb-synthetic-helper-free-whole-vault",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "vault-withdrawal"
+  },
+  {
+    "name": "qsb-synthetic-helper-free-whole-vault-testnet4",
+    "network": "testnet4",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "vault-withdrawal"
+  },
+  {
+    "name": "qsb-synthetic-unlabelled-bare-output-vault-withdrawal",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "vault-withdrawal"
+  },
+  {
+    "name": "qsb-synthetic-unlabelled-bare-output-none",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "none"
+  },
+  {
+    "name": "qsb-synthetic-claimed-vault-input-none",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "none"
+  },
+  {
+    "name": "qsb-synthetic-claimed-vault-input-vault-withdrawal",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "vault-withdrawal"
+  },
+  {
+    "name": "qsb-synthetic-output-pays-spent-vault",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      },
+      {
+        "label": "Your new vault #1",
+        "scriptFile": "qsb-synthetic-vault-1.script"
+      }
+    ],
+    "policy": "vault-withdrawal"
+  },
+  {
+    "name": "qsb-synthetic-bad-label-non-ascii",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault é0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "none"
+  },
+  {
+    "name": "qsb-synthetic-bad-label-49-chars",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "none"
+  },
+  {
+    "name": "qsb-synthetic-bad-label-control-char",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault\n#0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "none"
+  },
+  {
+    "name": "qsb-real-helper-whole-vault-none",
+    "network": "regtest",
+    "owned": [
+      {
+        "label": "Your vault #0",
+        "scriptFile": "qsb-vault-0.script"
+      }
+    ],
+    "policy": "none"
+  }
+]

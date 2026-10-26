@@ -15025,6 +15025,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "visualsign-bitcoin-owned"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "hex",
+ "serde",
+ "serde_json",
+ "visualsign",
+ "visualsign-bitcoin",
+]
+
+[[package]]
 name = "visualsign-ethereum"
 version = "0.1.0"
 dependencies = [
