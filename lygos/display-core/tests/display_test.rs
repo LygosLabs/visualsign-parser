@@ -4,13 +4,16 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as b64;
-use display_core::display;
+use display_core::{ENGINE, digest_hex, display};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 
 const PAYLOAD_PREFIX: &str = "{\"payload\":";
+const ENGINE_MARK: &str = ",\"engine\":\"";
 const DIGEST_MARK: &str = ",\"digest\":\"";
+/// What this crate version must report as its engine.
+const ENGINE_TEXT: &str = "display-core/0.1.0";
 
 fn dir(rel: &str) -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -38,14 +41,25 @@ fn call(psbt: &str, network: &str, owned: &str, policy: &str) -> String {
     display(Some(psbt), Some(network), Some(owned), Some(policy))
 }
 
-/// The payload text and digest of a successful display.
-fn split(out: &str) -> (&str, &str) {
+/// The payload text, engine and digest of a successful display.
+fn split(out: &str) -> (&str, &str, &str) {
     let body = out
         .strip_prefix(PAYLOAD_PREFIX)
         .unwrap_or_else(|| panic!("{out}"));
-    let at = body.rfind(DIGEST_MARK).unwrap();
-    let digest = body[at + DIGEST_MARK.len()..].strip_suffix("\"}").unwrap();
-    (&body[..at], digest)
+    let at = body
+        .rfind(ENGINE_MARK)
+        .unwrap_or_else(|| panic!("no engine: {out}"));
+    let (engine, rest) = body[at + ENGINE_MARK.len()..].split_once('"').unwrap();
+    let digest = rest
+        .strip_prefix(DIGEST_MARK)
+        .and_then(|d| d.strip_suffix("\"}"))
+        .unwrap();
+    (&body[..at], engine, digest)
+}
+
+/// sha256 over `engine || "\n" || payload`.
+fn engine_digest(engine: &str, payload: &str) -> String {
+    sha256_hex(&format!("{engine}\n{payload}"))
 }
 
 fn sha256_hex(text: &str) -> String {
@@ -82,10 +96,11 @@ fn every_visualsign_golden_reproduces() {
     for name in names {
         let psbt = base64_of_hex(&read(bitcoin_fixtures().join(format!("{name}.input"))));
         let out = call(&psbt, "bitcoin", "[]", "none");
-        let (payload, digest) = split(&out);
+        let (payload, engine, digest) = split(&out);
         let expected = read(bitcoin_fixtures().join(format!("{name}.expected")));
         assert_eq!(payload, expected.trim_end(), "{name}");
-        assert_eq!(digest, sha256_hex(payload), "{name}");
+        assert_eq!(engine, ENGINE_TEXT, "{name}");
+        assert_eq!(digest, engine_digest(engine, payload), "{name}");
     }
 }
 
@@ -118,9 +133,10 @@ fn every_owned_shape_golden_reproduces() {
         match expected.strip_prefix("refused: ") {
             Some(code) => assert_eq!(out, format!(r#"{{"refused":"{code}"}}"#), "{name}"),
             None => {
-                let (payload, digest) = split(&out);
+                let (payload, engine, digest) = split(&out);
+                assert_eq!(engine, ENGINE_TEXT, "{name}");
                 assert_eq!(payload, expected, "{name}");
-                assert_eq!(digest, sha256_hex(payload), "{name}");
+                assert_eq!(digest, engine_digest(engine, payload), "{name}");
             }
         }
     }
@@ -134,13 +150,25 @@ fn digest_is_sha256_of_the_exact_payload_text() {
         &owned_vault0(),
         "vault-withdrawal",
     );
-    let (payload, digest) = split(&out);
-    assert_eq!(digest, sha256_hex(payload));
+    let (payload, engine, digest) = split(&out);
+    assert_eq!(engine, ENGINE_TEXT);
+    assert_eq!(digest, engine_digest(engine, payload));
+    assert_ne!(
+        digest,
+        sha256_hex(payload),
+        "the engine must be in the digest"
+    );
     assert_eq!(digest.len(), 64);
     // The payload is embedded verbatim: it parses as JSON, and the whole
     // output is ASCII JSON.
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(parsed["digest"], digest);
+    assert_eq!(parsed["engine"], ENGINE_TEXT);
+    // Keys in the order the contract states.
+    let p = out.find("\"payload\":").unwrap();
+    let e = out.rfind("\"engine\":").unwrap();
+    let d = out.rfind("\"digest\":").unwrap();
+    assert!(p < e && e < d, "{out}");
     assert!(out.is_ascii());
     assert!(payload.contains("Your vault #0"));
 }
@@ -175,7 +203,7 @@ fn regtest_and_testnet4_encode_the_same_psbt_differently() {
     assert!(regtest.contains("bcrt1qtfqws6mhwa0hcmp8sdkqvp9ece9xs96gh6yx9l"));
     assert!(testnet4.contains("tb1qtfqws6mhwa0hcmp8sdkqvp9ece9xs96g"));
     assert!(!testnet4.contains("bcrt1"));
-    assert_ne!(split(&regtest).1, split(&testnet4).1);
+    assert_ne!(split(&regtest).2, split(&testnet4).2);
 }
 
 #[test]
@@ -250,4 +278,32 @@ fn vault_withdrawal_refusals_reach_the_boundary() {
         r#"{"refused":"unlabelled-script"}"#
     );
     assert!(call(&psbt, "regtest", "[]", "none").starts_with(PAYLOAD_PREFIX));
+}
+
+#[test]
+fn a_different_engine_gives_a_different_digest() {
+    assert_eq!(ENGINE, ENGINE_TEXT);
+    assert!(
+        ENGINE
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"./-".contains(&b))
+    );
+    let out = call(
+        &shape1_base64(),
+        "regtest",
+        &owned_vault0(),
+        "vault-withdrawal",
+    );
+    let (payload, engine, digest) = split(&out);
+    assert_eq!(digest_hex(engine, payload), digest);
+    for other in [
+        "display-core/0.1.1",
+        "display-core/0.2.0",
+        "other-engine/0.1.0",
+        "",
+    ] {
+        assert_ne!(digest_hex(other, payload), digest, "{other:?}");
+    }
+    // Same engine, payload one byte different: different digest.
+    assert_ne!(digest_hex(engine, &format!("{payload} ")), digest);
 }

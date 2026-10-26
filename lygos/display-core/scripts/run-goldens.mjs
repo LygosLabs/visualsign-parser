@@ -24,12 +24,14 @@ function call(...args) {
   try { return glue.display(...args); } catch (e) { fail(`threw ${e} for ${JSON.stringify(args).slice(0, 80)}`); return ""; }
 }
 
-// The payload text exactly as embedded, and the digest.
+const ENGINE = "display-core/0.1.0";
+
+// The payload text exactly as embedded, the engine and the digest.
 function split(out) {
-  const pre = '{"payload":', mark = ',"digest":"';
-  if (!out.startsWith(pre)) return [null, null];
-  const at = out.lastIndexOf(mark);
-  return [out.slice(pre.length, at), out.slice(at + mark.length, -2)];
+  const pre = '{"payload":', emark = ',"engine":"', dmark = '","digest":"';
+  if (!out.startsWith(pre)) return [null, null, null];
+  const e = out.lastIndexOf(emark), d = out.lastIndexOf(dmark);
+  return [out.slice(pre.length, e), out.slice(e + emark.length, d), out.slice(d + dmark.length, -2)];
 }
 
 function check(name, out, expected) {
@@ -38,8 +40,8 @@ function check(name, out, expected) {
     out === want ? console.log("MATCH ", name) : fail(`${name}: ${out.slice(0, 80)}`);
     return;
   }
-  const [payload, digest] = split(out);
-  const ok = payload === expected && digest === sha256(payload);
+  const [payload, engine, digest] = split(out);
+  const ok = payload === expected && engine === ENGINE && digest === sha256(engine + "\n" + payload);
   ok ? console.log("MATCH ", name) : fail(`${name} differs`);
   // A consumer that re-serializes the parsed payload gets the same bytes?
   const round = JSON.stringify(JSON.parse(out).payload) === payload;

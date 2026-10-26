@@ -3,9 +3,10 @@
 //! In: a base64 PSBT v0, the network, the owned-script list as JSON
 //! (`[{"scriptHex": "...", "label": "..."}]`) and the policy. Out, as a string:
 //!
-//! - `{"payload":<SignablePayload JSON>,"digest":"<sha256 hex>"}`, where the
-//!   payload is exactly the parser's serialization and the digest is SHA-256
-//!   over exactly those payload bytes; or
+//! - `{"payload":<SignablePayload JSON>,"engine":"<ENGINE>","digest":"<hex>"}`,
+//!   where the payload is exactly the parser's serialization, [`ENGINE`] is
+//!   this build's compiled-in identity, and the digest is SHA-256 over the
+//!   bytes `engine || "\n" || payload` (see [`digest_hex`]); or
 //! - `{"refused":"<code>"}`.
 //!
 //! It never throws across the boundary: the export takes any JavaScript
@@ -18,6 +19,10 @@ use sha2::{Digest, Sha256};
 use visualsign_bitcoin_owned::{OwnedScripts, Policy, Refusal};
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
+
+/// This engine's identity, compiled in. It is part of every digest, so the
+/// same payload from a different engine gives a different digest.
+pub const ENGINE: &str = concat!("display-core/", env!("CARGO_PKG_VERSION"));
 
 /// Base64 of the PSBT magic `psbt 0xff`: every base64 PSBT starts with it.
 const PSBT_BASE64_PREFIX: &str = "cHNidP8";
@@ -90,8 +95,19 @@ fn render(
     Ok(envelope(&payload_json))
 }
 
-/// `{"payload":<payload_json>,"digest":"<sha256 of payload_json>"}`.
+/// SHA-256, as lowercase hex, of the bytes `engine || "\n" || payload_json`.
+#[must_use]
+pub fn digest_hex(engine: &str, payload_json: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(engine.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(payload_json.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// `{"payload":<payload_json>,"engine":"<ENGINE>","digest":"<digest_hex>"}`.
+/// `ENGINE` is a constant of `[a-z0-9./-]` characters, so it needs no escaping.
 fn envelope(payload_json: &str) -> String {
-    let digest = hex::encode(Sha256::digest(payload_json.as_bytes()));
-    format!("{{\"payload\":{payload_json},\"digest\":\"{digest}\"}}")
+    let digest = digest_hex(ENGINE, payload_json);
+    format!("{{\"payload\":{payload_json},\"engine\":\"{ENGINE}\",\"digest\":\"{digest}\"}}")
 }
