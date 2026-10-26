@@ -50,6 +50,15 @@ fn regen() -> bool {
         .unwrap_or(false)
 }
 
+/// After a regeneration run: fail, because nothing was checked.
+fn fail_if_regenerated(what: &str) {
+    assert!(
+        !regen(),
+        "REGEN_FIXTURES is set: {what} rewritten, nothing checked. Review the diff, \
+         then run again without REGEN_FIXTURES."
+    );
+}
+
 fn read_hex(name: &str) -> Vec<u8> {
     hex::decode(fs::read_to_string(fixture_path(name)).unwrap().trim()).unwrap()
 }
@@ -360,6 +369,7 @@ fn shape_inputs_are_reproducible() {
         let stored = fs::read_to_string(&path).unwrap();
         assert_eq!(built, stored.trim(), "fixture {} is stale", case.name);
     }
+    fail_if_regenerated(".input files");
 }
 
 fn policy_name(policy: Policy) -> &'static str {
@@ -421,6 +431,7 @@ fn shape_manifest_and_vault_1_are_reproducible() {
         let stored = fs::read_to_string(&path).unwrap();
         assert_eq!(built, stored.trim_end(), "fixture {name} is stale");
     }
+    fail_if_regenerated("shapes.json and the vault 1 script");
 }
 
 #[test]
@@ -440,6 +451,7 @@ fn shapes_match_their_goldens() {
             case.name
         );
     }
+    fail_if_regenerated(".expected files");
 }
 
 #[test]
@@ -558,21 +570,56 @@ fn a_label_needs_the_exact_bytes() {
 }
 
 #[test]
-fn standard_scripts_are_never_labelled() {
-    let owned = vec![
-        entry(&vault0(), "Your vault #0"),
-        entry(&recipient(), "Your vault #9"),
-    ];
-    let json = run(
-        &psbt_hex(&helper_free_whole_vault()),
-        owned,
-        Policy::VaultWithdrawal,
-        Network::Regtest,
-    );
-    assert!(!json.contains("Your vault #9"), "{json}");
-    assert!(
-        json.contains("bcrt1qtfqws6mhwa0hcmp8sdkqvp9ece9xs96gh6yx9l"),
-        "{json}"
+fn owned_scripts_must_be_bare() {
+    // A script with an address form can never be owned, so a label can never
+    // replace or sit beside an address.
+    let witness_v2 = ScriptBuf::from_bytes([vec![0x52, 0x20], vec![7u8; 32]].concat());
+    let anchor = ScriptBuf::from_bytes(vec![0x51, 0x02, 0x4e, 0x73]);
+    let p2tr = ScriptBuf::from_bytes([vec![0x51, 0x20], vec![9u8; 32]].concat());
+    let p2sh = ScriptBuf::from_bytes([vec![0xa9, 0x14], vec![3u8; 20], vec![0x87]].concat());
+    for script in [recipient(), witness_v2, anchor, p2tr, p2sh] {
+        let owned = vec![
+            entry(&vault0(), "Your vault #0"),
+            entry(&script, "Your vault #9"),
+        ];
+        assert_eq!(
+            OwnedScripts::new(owned.clone()),
+            Err(Refusal::OwnedScriptHasAddress),
+            "{script:?}"
+        );
+        assert_eq!(
+            run(
+                &psbt_hex(&helper_free_whole_vault()),
+                owned,
+                Policy::None,
+                Network::Regtest
+            ),
+            "refused: owned-script-has-address"
+        );
+    }
+}
+
+#[test]
+fn an_output_with_an_address_is_never_labelled_and_unowned_ones_are_refused() {
+    // Witness v2 output, not owned: shown by address under none, refused
+    // under vault-withdrawal.
+    let mut p = helper_free_whole_vault();
+    p.unsigned_tx.output[0].value = Amount::from_sat(80_000);
+    let v2 = ScriptBuf::from_bytes([vec![0x52, 0x20], vec![7u8; 32]].concat());
+    p.unsigned_tx.output.push(txout(v2, 5_000));
+    p.outputs.push(Default::default());
+    let psbt = psbt_hex(&p);
+    let json = run(&psbt, owned_vault0(), Policy::None, Network::Regtest);
+    assert!(json.contains(r#""Subtitle":{"Text":"bcrt1z"#), "{json}");
+    assert_eq!(json.matches("Recognized Script").count(), 1, "{json}");
+    assert_eq!(
+        run(
+            &psbt,
+            owned_vault0(),
+            Policy::VaultWithdrawal,
+            Network::Regtest
+        ),
+        "refused: unlabelled-script"
     );
 }
 
@@ -608,9 +655,92 @@ fn labels_follow_the_allowlist() {
         "a\\b",
         "a,b",
         "\u{7f}",
+        // The character rule on its own: every case carries the prefix.
+        "Your a_b",
+        "Your a.b",
+        "Your a/b",
+        "Your a:b",
+        "Your a\"b",
+        "Your a'b",
+        "Your a<b",
+        "Your a\\b",
+        "Your a,b",
+        "Your caf\u{e9}",
+        "Your tab\there",
+        "Your new\nline",
+        "Your nul\0",
+        "Your \u{7f}",
+        "Your 0.5",
+        "Your +1",
+        "Your ",
+        "Your    ",
     ] {
         let owned = OwnedScripts::new([(vault0().to_hex_string(), bad.to_string())]);
         assert_eq!(owned, Err(Refusal::BadLabel), "{bad:?} accepted");
+    }
+}
+
+#[test]
+fn labels_cannot_look_like_an_address_or_an_amount() {
+    for bad in [
+        "Your bc1qcyahasx62rxqx50028wkgwzpf9l78zrrg7husa",
+        "Your tb1qcyahasx62rxqx50028wkgwzpf9l78zrrzcv0tw",
+        "Your bcrt1qtfqws6mhwa0hcmp8sdkqvp9ece9xs96gh6yx9l",
+        "Your BC1QCYAHASX62RXQX5",
+        "Your bc1qcyah",
+        "Your 1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+        "Your 3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy",
+        "Your mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn",
+        "Your n3GNqMveyvaPvUbH469vDRadqpJMPc84JA",
+        "Your 2MzQwSSnBHWHqSAqtTVQ6v47XtaisrJa1Vc",
+        "Your vault bc1qcyahasx62rx",
+        "Your 1 BTC",
+        "Your 2 btc",
+        "Your 21000000BTC",
+        "Your 5sat",
+        "Your 100 sats",
+        "Your vault 1 BTC",
+        "Your vault #1 sat",
+    ] {
+        let owned = OwnedScripts::new([(vault0().to_hex_string(), bad.to_string())]);
+        assert_eq!(owned, Err(Refusal::BadLabel), "{bad:?} accepted");
+    }
+    for good in [
+        "Your vault #0",
+        "Your new vault #1",
+        "Your change",
+        "Your vault (old) - 2",
+        "Your 2nd vault",
+        "Your mine",
+        "Your vault #12",
+    ] {
+        let owned = OwnedScripts::new([(vault0().to_hex_string(), good.to_string())]);
+        assert!(owned.is_ok(), "{good:?} refused");
+    }
+}
+
+#[test]
+fn two_owned_scripts_cannot_share_a_label() {
+    for (a, b) in [
+        ("Your vault #0", "Your vault #0"),
+        ("Your vault #0", "Your Vault #0"),
+        ("Your vault #0", "Your VAULT #0"),
+    ] {
+        let owned = vec![entry(&vault0(), a), entry(&vault1(), b)];
+        assert_eq!(
+            OwnedScripts::new(owned.clone()),
+            Err(Refusal::DuplicateLabel),
+            "{a:?} {b:?}"
+        );
+        assert_eq!(
+            run(
+                &psbt_hex(&partial_with_change()),
+                owned,
+                Policy::VaultWithdrawal,
+                Network::Regtest
+            ),
+            "refused: duplicate-label"
+        );
     }
 }
 

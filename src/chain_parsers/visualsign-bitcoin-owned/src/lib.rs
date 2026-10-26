@@ -10,9 +10,12 @@
 //! - A spent (input) script is labelled only when the parser verified it
 //!   through a `non_witness_utxo` that hashes to the prevout txid. A script
 //!   claimed by `witness_utxo` alone is shown exactly as the parser shows it.
+//! - Only bare scripts (no address form) can be owned, so a label never
+//!   replaces or sits beside an address.
 //! - Labels are 1 to 48 characters from letters, digits, space, `-`, `#`, `(`
-//!   and `)`, and start with `Your ` (so a label cannot pass for an address).
-//!   Anything else refuses the whole call.
+//!   and `)`, start with `Your ` followed by something other than spaces, do
+//!   not look like an address or an amount (see [`is_valid_label`]), and are
+//!   unique ignoring ASCII case. Anything else refuses the whole call.
 //!
 //! [`Policy::VaultWithdrawal`] refuses the whole display unless every input is
 //! verified through its previous transaction, every input and output script
@@ -20,9 +23,10 @@
 //! input spends, and every input asks for SIGHASH_ALL (or nothing).
 
 use bitcoin::psbt::{Psbt, PsbtSighashType};
-use bitcoin::{EcdsaSighashType, Network, Script, ScriptBuf, TapSighashType};
+use bitcoin::{Address, EcdsaSighashType, Network, Script, ScriptBuf, TapSighashType};
 use serde::Deserialize;
 use std::fmt;
+use std::sync::Arc;
 use visualsign::SignablePayload;
 use visualsign::vsptrait::{Transaction, VisualSignConverter, VisualSignOptions};
 use visualsign_bitcoin::{
@@ -39,8 +43,16 @@ pub const MAX_SCRIPT_BYTES: usize = 10_000;
 /// Longest owned-script JSON.
 pub const MAX_OWNED_JSON_BYTES: usize = 1024 * 1024;
 
-/// Every label starts with this, so none can look like an address.
+/// Every label starts with this.
 const LABEL_PREFIX: &str = "Your ";
+
+/// How Bitcoin addresses start: bech32 HRPs and the base58 version characters
+/// of mainnet and testnet (P2PKH 1, m, n; P2SH 3, 2).
+const ADDRESS_PREFIXES: &[&str] = &["bcrt1", "bc1", "tb1", "1", "3", "m", "n", "2"];
+
+/// A word this long that starts like an address and is all letters and digits
+/// reads as an address (or a truncated one) and is refused.
+const ADDRESS_LIKE_MIN_CHARS: usize = 8;
 
 /// The row added under every labelled script.
 const MATCH_LABEL: &str = "Recognized By";
@@ -70,6 +82,10 @@ pub enum Refusal {
     OutputPaysSpentScript,
     /// Vault withdrawal: an input asks for a sighash other than ALL / DEFAULT.
     UnsupportedSighash,
+    /// An owned script has an address form; only bare scripts are labelled.
+    OwnedScriptHasAddress,
+    /// Two owned scripts have the same label (ignoring ASCII case).
+    DuplicateLabel,
 }
 
 impl Refusal {
@@ -87,6 +103,8 @@ impl Refusal {
             Self::UnlabelledScript => "unlabelled-script",
             Self::OutputPaysSpentScript => "output-pays-spent-script",
             Self::UnsupportedSighash => "unsupported-sighash",
+            Self::OwnedScriptHasAddress => "owned-script-has-address",
+            Self::DuplicateLabel => "duplicate-label",
         }
     }
 }
@@ -152,8 +170,14 @@ impl OwnedScripts {
                 return Err(Refusal::BadLabel);
             }
             let script = ScriptBuf::from_bytes(bytes);
+            if has_address_form(&script) {
+                return Err(Refusal::OwnedScriptHasAddress);
+            }
             if out.iter().any(|(s, _)| *s == script) {
                 return Err(Refusal::DuplicateOwnedScript);
+            }
+            if out.iter().any(|(_, l)| l.eq_ignore_ascii_case(&label)) {
+                return Err(Refusal::DuplicateLabel);
             }
             out.push((script, label));
         }
@@ -170,20 +194,57 @@ impl OwnedScripts {
     }
 }
 
+/// The parser shows this script as an address on some network.
+fn has_address_form(script: &Script) -> bool {
+    Address::from_script(script, Network::Bitcoin).is_ok()
+}
+
+/// A label is valid when it is 1 to [`MAX_LABEL_CHARS`] characters from the
+/// allowlist, starts with [`LABEL_PREFIX`] followed by something other than
+/// spaces, and after the prefix neither looks like an address nor like an
+/// amount.
 fn is_valid_label(label: &str) -> bool {
     (1..=MAX_LABEL_CHARS).contains(&label.len())
         && label
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'-' | b'#' | b'(' | b')'))
-        && label.starts_with(LABEL_PREFIX)
+        && label.strip_prefix(LABEL_PREFIX).is_some_and(|rest| {
+            !rest.trim().is_empty() && !looks_like_address(rest) && !looks_like_amount(rest)
+        })
+}
+
+/// Some word starts with an address prefix (any ASCII case) and is at least
+/// [`ADDRESS_LIKE_MIN_CHARS`] letters and digits.
+fn looks_like_address(text: &str) -> bool {
+    text.split(' ').any(|word| {
+        let lower = word.to_ascii_lowercase();
+        word.len() >= ADDRESS_LIKE_MIN_CHARS
+            && word.bytes().all(|b| b.is_ascii_alphanumeric())
+            && ADDRESS_PREFIXES.iter().any(|p| lower.starts_with(p))
+    })
+}
+
+/// A run of digits followed (after optional spaces) by `btc` or `sat`, in any
+/// ASCII case.
+fn looks_like_amount(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    (0..bytes.len()).any(|i| {
+        let ends_digits =
+            bytes[i].is_ascii_digit() && bytes.get(i + 1).is_none_or(|b| !b.is_ascii_digit());
+        ends_digits && {
+            let after = lower[i + 1..].trim_start_matches(' ');
+            after.starts_with("btc") || after.starts_with("sat")
+        }
+    })
 }
 
 #[derive(Debug)]
-struct OwnedRecognizer<'a> {
-    owned: &'a OwnedScripts,
+struct OwnedRecognizer {
+    owned: OwnedScripts,
 }
 
-impl ScriptRecognizer for OwnedRecognizer<'_> {
+impl ScriptRecognizer for OwnedRecognizer {
     fn recognize(&self, script_pubkey: &Script, source: ScriptSource) -> Option<RecognizedScript> {
         match source {
             ScriptSource::Output | ScriptSource::VerifiedPrevout => self
@@ -210,10 +271,11 @@ pub fn display(
     if policy == Policy::VaultWithdrawal {
         check_vault_withdrawal(wrapper.inner(), owned)?;
     }
-    let recognizer = OwnedRecognizer { owned };
-    let recognizers: [&dyn ScriptRecognizer; 1] = [&recognizer];
+    let recognizer: Arc<dyn ScriptRecognizer> = Arc::new(OwnedRecognizer {
+        owned: owned.clone(),
+    });
     BitcoinVisualSignConverter::new(network)
-        .with_recognizers(&recognizers)
+        .with_recognizers(vec![recognizer])
         .to_visual_sign_payload(wrapper, VisualSignOptions::default())
         .map(|r| r.payload)
         .map_err(|_| Refusal::Rejected)
