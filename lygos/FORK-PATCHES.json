@@ -231,6 +231,15 @@
         "lygos/display-core/scripts/check-reproducible.sh"
       ],
       "reason": "Ours: check-all pins test counts and fails on ignored tests, compares the wasm to WASM-SHA256, runs the reproducibility, patch-manifest and linked-chains checks."
+    },
+    {
+      "commit": "f44798ddcd0cee8ab893e95da23abaeab9874fdd",
+      "subject": "fix(lygos): check-all keeps the reproducibility build logs",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/check-all.sh"
+      ],
+      "reason": "Ours: a fully passing check-all exited 1 because it tried to remove the reproducibility dir that still holds the build logs; keep the logs."
     }
   ]
 }
