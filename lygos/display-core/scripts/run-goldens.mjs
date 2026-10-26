@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const pkgDir = path.resolve(process.argv[2]);
-const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../src");
 const btcFx = path.join(srcDir, "chain_parsers/visualsign-bitcoin/tests/fixtures");
 const ownFx = path.join(srcDir, "chain_parsers/visualsign-bitcoin-owned/tests/fixtures");
 

@@ -1,0 +1,50 @@
+# display-core is its own workspace, outside the upstream one under src/, so
+# the secp256k1 "lowmemory" feature it turns on never reaches upstream crates
+# or `make -C src build` (scripts/check-upstream-isolation.sh checks this).
+[workspace]
+
+[package]
+name = "display-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+# cdylib for WebAssembly, rlib for the native tests.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bitcoin = "0.32"
+hex = "0.4.3"
+# Not used directly: turns on secp256k1's small precomputed tables for the
+# copy `bitcoin` links (feature unification). The parser only verifies.
+secp256k1 = { version = "0.29", default-features = false, features = ["lowmemory"] }
+sha2 = "0.10"
+visualsign-bitcoin-owned = { path = "../../src/chain_parsers/visualsign-bitcoin-owned" }
+wasm-bindgen = "=0.2.106"
+
+[dev-dependencies]
+base64 = "0.22.1"
+serde_json = "1.0.142"
+
+# The upstream workspace's rules (src/Cargo.toml [workspace.lints]).
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+disallowed_types = "deny"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+# The WebAssembly build (scripts/build-wasm.sh): small, one codegen unit, no
+# unwinding.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

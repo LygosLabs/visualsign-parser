@@ -19,11 +19,11 @@ fn dir(rel: &str) -> PathBuf {
 }
 
 fn bitcoin_fixtures() -> PathBuf {
-    dir("../chain_parsers/visualsign-bitcoin/tests/fixtures")
+    dir("../../src/chain_parsers/visualsign-bitcoin/tests/fixtures")
 }
 
 fn owned_fixtures() -> PathBuf {
-    dir("../chain_parsers/visualsign-bitcoin-owned/tests/fixtures")
+    dir("../../src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures")
 }
 
 fn read(path: PathBuf) -> String {

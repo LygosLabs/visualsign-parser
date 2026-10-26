@@ -23,22 +23,11 @@ members = [
   "chain_parsers/visualsign-sui",
   "chain_parsers/visualsign-tron",
   "chain_parsers/visualsign-unspecified",
-  "display-core",
   "solana_test_utils",
   "tools/idl-meta",
 ]
 
 resolver = "3"
-
-# display-core's WebAssembly build (scripts/build-wasm.sh): small, one
-# codegen unit, no unwinding.
-[profile.wasm-release]
-inherits = "release"
-opt-level = "z"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
 
 [profile.dev]
 opt-level = 0

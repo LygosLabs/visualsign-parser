@@ -13,21 +13,21 @@
 set -euo pipefail
 
 crate_dir=$(cd "$(dirname "$0")/.." && pwd)
-src_dir=$(cd "$crate_dir/.." && pwd)
+repo_dir=$(cd "$crate_dir/../.." && pwd)
 out_dir=${1:?usage: build-wasm.sh <out-dir> [cargo-target-dir]}
-target_dir=${2:-$src_dir/target}
+target_dir=${2:-$crate_dir/target}
 cargo_home=${CARGO_HOME:-$HOME/.cargo}
 mkdir -p "$out_dir" "$target_dir"
 target_dir=$(cd "$target_dir" && pwd)
 
-export RUSTFLAGS="--remap-path-prefix=$src_dir=/src --remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$target_dir=/target"
+export RUSTFLAGS="--remap-path-prefix=$repo_dir=/repo --remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$target_dir=/target"
 
 wasm-bindgen --version | grep -qx 'wasm-bindgen 0.2.106' || {
   echo "wasm-bindgen-cli 0.2.106 required" >&2
   exit 1
 }
 
-cd "$src_dir"
+cd "$crate_dir"
 cargo build --locked -p display-core --profile wasm-release \
   --target wasm32-unknown-unknown --target-dir "$target_dir"
 wasm-bindgen --target web --out-dir "$out_dir" --out-name display_core \
