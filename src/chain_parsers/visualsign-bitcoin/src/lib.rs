@@ -5,9 +5,9 @@
 //! sighash commitments cannot be trusted is shown as unknown, alongside the
 //! claimed value. See [`analysis`] for the exact rules.
 //!
-//! Bare (non-standard) scripts are shown as raw hex, on inputs and outputs. A
-//! caller that knows such scripts can name them with a [`ScriptRecognizer`]
-//! through [`BitcoinVisualSignConverter::with_recognizers`].
+//! Bare scripts (scripts with no address form) are shown as raw hex, on inputs
+//! and outputs. A caller that knows such scripts can name them with a
+//! [`ScriptRecognizer`] through [`BitcoinVisualSignConverter::with_recognizers`].
 
 mod analysis;
 #[cfg(feature = "cli-plugin")]
@@ -18,12 +18,16 @@ mod scripts;
 pub use cli_plugin::{BitcoinArgs, BitcoinPlugin};
 
 pub use analysis::BitcoinParserError;
-pub use scripts::{RecognizedScript, ScriptRecognizer, ScriptSource};
+pub use scripts::{
+    MAX_RECOGNIZED_FIELDS, MAX_RECOGNIZED_TEXT, RESERVED_LABEL_PREFIXES, RESERVED_LABELS,
+    RecognizedScript, ScriptRecognizer, ScriptSource,
+};
 
 use analysis::{AmountSource, Analysis, Fee, InputInfo, OutputInfo};
 use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
 use bitcoin::psbt::Psbt;
 use bitcoin::{Amount, Network};
+use std::sync::Arc;
 use visualsign::encodings::SupportedEncodings;
 use visualsign::field_builders::{
     create_address_field, create_amount_field, create_preview_layout, create_text_field,
@@ -37,10 +41,6 @@ use visualsign::{AnnotatedPayloadField, SignablePayload};
 /// Upper bound on the encoded input. Real PSBTs with full previous
 /// transactions are well below this.
 const MAX_PSBT_CHARS: usize = 4 * 1024 * 1024;
-
-/// Bounds on what a [`ScriptRecognizer`] may add to one script.
-const MAX_RECOGNIZED_FIELDS: usize = 8;
-const MAX_RECOGNIZED_TEXT: usize = 256;
 
 /// Parse a network name as accepted by `--bitcoin-network`.
 pub fn parse_network(name: &str) -> Result<Network, String> {
@@ -123,47 +123,32 @@ impl BitcoinTransactionWrapper {
 
 /// Converter for Bitcoin PSBTs. A PSBT does not name its network, so the
 /// network (used for address encoding) is part of the converter.
-#[derive(Debug, Clone, Copy)]
+///
+/// Optional [`ScriptRecognizer`]s, owned by the converter, may name bare
+/// scripts (see [`Self::with_recognizers`]). The converter stays `Send + Sync`,
+/// so it can be registered like any other.
+#[derive(Debug, Clone)]
 pub struct BitcoinVisualSignConverter {
     network: Network,
+    recognizers: Arc<[Arc<dyn ScriptRecognizer>]>,
 }
 
 impl BitcoinVisualSignConverter {
     #[must_use]
     pub fn new(network: Network) -> Self {
-        Self { network }
-    }
-
-    /// A converter that also asks `recognizers` to name bare scripts.
-    #[must_use]
-    pub fn with_recognizers<'a>(
-        self,
-        recognizers: &'a [&'a dyn ScriptRecognizer],
-    ) -> BitcoinRecognizingConverter<'a> {
-        BitcoinRecognizingConverter {
-            network: self.network,
-            recognizers,
+        Self {
+            network,
+            recognizers: Arc::new([]),
         }
     }
-}
 
-/// [`BitcoinVisualSignConverter`] plus caller-supplied [`ScriptRecognizer`]s.
-#[derive(Debug, Clone, Copy)]
-pub struct BitcoinRecognizingConverter<'a> {
-    network: Network,
-    recognizers: &'a [&'a dyn ScriptRecognizer],
-}
-
-fn convert(
-    transaction_wrapper: &BitcoinTransactionWrapper,
-    network: Network,
-    recognizers: &[&dyn ScriptRecognizer],
-    options: VisualSignOptions,
-) -> Result<ConversionResult, VisualSignError> {
-    let analysis = analysis::analyze(transaction_wrapper.inner(), network, recognizers)
-        .map_err(|e| VisualSignError::ConversionError(e.to_string()))?;
-    let payload = build_payload(&analysis, network, options)?;
-    Ok(ConversionResult::new(payload))
+    /// Ask `recognizers`, in order, to name bare scripts (scripts with no
+    /// address form). Replaces any recognizers set before.
+    #[must_use]
+    pub fn with_recognizers(mut self, recognizers: Vec<Arc<dyn ScriptRecognizer>>) -> Self {
+        self.recognizers = recognizers.into();
+        self
+    }
 }
 
 impl Default for BitcoinVisualSignConverter {
@@ -178,28 +163,15 @@ impl VisualSignConverter<BitcoinTransactionWrapper> for BitcoinVisualSignConvert
         transaction_wrapper: BitcoinTransactionWrapper,
         options: VisualSignOptions,
     ) -> Result<ConversionResult, VisualSignError> {
-        convert(&transaction_wrapper, self.network, &[], options)
+        let analysis =
+            analysis::analyze(transaction_wrapper.inner(), self.network, &self.recognizers)
+                .map_err(|e| VisualSignError::ConversionError(e.to_string()))?;
+        let payload = build_payload(&analysis, self.network, options)?;
+        Ok(ConversionResult::new(payload))
     }
 }
 
 impl VisualSignConverterFromString<BitcoinTransactionWrapper> for BitcoinVisualSignConverter {}
-
-impl VisualSignConverter<BitcoinTransactionWrapper> for BitcoinRecognizingConverter<'_> {
-    fn to_visual_sign_payload(
-        &self,
-        transaction_wrapper: BitcoinTransactionWrapper,
-        options: VisualSignOptions,
-    ) -> Result<ConversionResult, VisualSignError> {
-        convert(
-            &transaction_wrapper,
-            self.network,
-            self.recognizers,
-            options,
-        )
-    }
-}
-
-impl VisualSignConverterFromString<BitcoinTransactionWrapper> for BitcoinRecognizingConverter<'_> {}
 
 /// Format satoshis as a fixed 8-decimal BTC string (valid for `create_amount_field`).
 fn btc(amount: Amount) -> String {
@@ -370,27 +342,12 @@ fn output_field(
     ))
 }
 
-/// The name a recognizer gave a script, if any. Only called after
-/// `script_fields` has checked the text.
+/// The name a recognizer gave a script, if any (checked when it was returned).
 fn recognized_name(details: &[scripts::ScriptDetail]) -> Option<&str> {
     details.iter().find_map(|d| match d {
         scripts::ScriptDetail::Custom(r) => Some(r.name.as_str()),
         _ => None,
     })
-}
-
-/// Recognizer text is caller code, not PSBT data: hold it to the same display
-/// rules as everything else (non-empty, printable ASCII, bounded).
-fn recognized_text(text: &str) -> Result<&str, VisualSignError> {
-    if text.is_empty()
-        || text.len() > MAX_RECOGNIZED_TEXT
-        || !text.bytes().all(|b| (0x20..=0x7e).contains(&b))
-    {
-        return Err(VisualSignError::ValidationError(
-            "script recognizer text must be 1 to 256 printable ASCII characters".into(),
-        ));
-    }
-    Ok(text)
 }
 
 fn script_fields(
@@ -425,24 +382,47 @@ fn script_fields(
                 fields.push(create_text_field("Script", script_hex)?);
                 fields.push(create_text_field("Script Status", reason)?);
             }
+            // Checked by `scripts::recognize` when the recognizer returned it.
             scripts::ScriptDetail::Custom(recognized) => {
-                if recognized.fields.len() > MAX_RECOGNIZED_FIELDS {
-                    return Err(VisualSignError::ValidationError(
-                        "script recognizer returned more than 8 rows".into(),
-                    ));
-                }
-                fields.push(create_text_field(
-                    "Recognized Script",
-                    recognized_text(&recognized.name)?,
-                )?);
+                fields.push(create_text_field("Recognized Script", &recognized.name)?);
                 for (label, value) in &recognized.fields {
-                    fields.push(create_text_field(
-                        recognized_text(label)?,
-                        recognized_text(value)?,
-                    )?);
+                    fields.push(create_text_field(label, value)?);
                 }
             }
         }
     }
     Ok(fields)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::scripts::{RESERVED_LABEL_PREFIXES, RESERVED_LABELS};
+
+    /// Every label literal this file writes, read from the source itself, must
+    /// be reserved, so the reserved list cannot drift from the code.
+    #[test]
+    fn every_label_the_parser_writes_is_reserved() {
+        let src = include_str!("lib.rs");
+        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        let mut found = 0;
+        for call in ["_field(", "create_preview_layout("] {
+            for (at, _) in body.match_indices(call) {
+                let rest = body[at + call.len()..].trim_start();
+                if let Some(lit) = rest.strip_prefix('"') {
+                    let label = &lit[..lit.find('"').unwrap()];
+                    assert!(RESERVED_LABELS.contains(&label), "{label:?} not reserved");
+                    found += 1;
+                } else if let Some(lit) = rest.strip_prefix("&format!(\"") {
+                    let prefix = &lit[..lit.find('{').unwrap()];
+                    assert!(
+                        RESERVED_LABEL_PREFIXES.contains(&prefix),
+                        "{prefix:?} not a reserved prefix"
+                    );
+                    found += 1;
+                }
+            }
+        }
+        assert!(found >= 20, "only {found} labels found");
+    }
 }

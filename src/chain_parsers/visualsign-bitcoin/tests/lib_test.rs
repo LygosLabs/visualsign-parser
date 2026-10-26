@@ -27,10 +27,11 @@ use bitcoin::{
     Address, Amount, EcdsaSighashType, Network, NetworkKind, OutPoint, Script, ScriptBuf, Sequence,
     TapSighashType, Transaction, TxIn, TxOut, Txid, Witness, absolute, transaction,
 };
-use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+use visualsign::registry::{Chain, TransactionConverterRegistry};
 use visualsign::vsptrait::{
     Transaction as VsTransaction, VisualSignConverter, VisualSignConverterFromString,
     VisualSignError, VisualSignOptions,
@@ -1132,24 +1133,33 @@ struct Recorder {
     script: ScriptBuf,
     name: String,
     fields: Vec<(String, String)>,
-    calls: RefCell<Vec<(String, ScriptSource)>>,
+    calls: Mutex<Vec<(String, ScriptSource)>>,
 }
 
 impl Recorder {
     fn new(script: ScriptBuf, name: &str) -> Self {
+        Self::with_fields(script, name, Vec::new())
+    }
+
+    fn with_fields(script: ScriptBuf, name: &str, fields: Vec<(String, String)>) -> Self {
         Self {
             script,
             name: name.to_string(),
-            fields: Vec::new(),
-            calls: RefCell::new(Vec::new()),
+            fields,
+            calls: Mutex::new(Vec::new()),
         }
+    }
+
+    fn calls(&self) -> Vec<(String, ScriptSource)> {
+        self.calls.lock().unwrap().clone()
     }
 }
 
 impl ScriptRecognizer for Recorder {
     fn recognize(&self, script_pubkey: &Script, source: ScriptSource) -> Option<RecognizedScript> {
         self.calls
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push((script_pubkey.to_hex_string(), source));
         (script_pubkey == self.script.as_script()).then(|| RecognizedScript {
             name: self.name.clone(),
@@ -1158,9 +1168,28 @@ impl ScriptRecognizer for Recorder {
     }
 }
 
-fn json_with(p: &Psbt, recognizers: &[&dyn ScriptRecognizer]) -> Result<String, VisualSignError> {
-    BitcoinVisualSignConverter::new(Network::Bitcoin)
-        .with_recognizers(recognizers)
+/// Names every script it is asked about.
+#[derive(Debug)]
+struct NamesEverything;
+
+impl ScriptRecognizer for NamesEverything {
+    fn recognize(&self, _: &Script, _: ScriptSource) -> Option<RecognizedScript> {
+        Some(RecognizedScript {
+            name: "Everything".to_string(),
+            fields: Vec::new(),
+        })
+    }
+}
+
+fn converter_with(recognizers: Vec<Arc<dyn ScriptRecognizer>>) -> BitcoinVisualSignConverter {
+    BitcoinVisualSignConverter::new(Network::Bitcoin).with_recognizers(recognizers)
+}
+
+fn json_with(
+    p: &Psbt,
+    recognizers: Vec<Arc<dyn ScriptRecognizer>>,
+) -> Result<String, VisualSignError> {
+    converter_with(recognizers)
         .to_visual_sign_payload_from_string(&encode(p), VisualSignOptions::default())
         .map(|r| r.payload.to_json().unwrap())
 }
@@ -1176,13 +1205,39 @@ fn bare_script_output() -> Psbt {
     p
 }
 
+/// The single-sig spend plus outputs that have an address form but no
+/// standard type: a witness v2 program and a pay-to-anchor.
+fn addressable_non_standard_outputs() -> Psbt {
+    let mut p = p2wpkh_single_sig();
+    p.unsigned_tx.output[1].value = Amount::from_sat(29_000);
+    let v2 = Builder::new()
+        .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_2)
+        .push_slice([7u8; 32])
+        .into_script();
+    let anchor = ScriptBuf::from_bytes(vec![0x51, 0x02, 0x4e, 0x73]);
+    for (script, value) in [(v2, 6_000), (anchor, 4_000)] {
+        p.unsigned_tx.output.push(txout(script, value));
+        p.outputs.push(Default::default());
+    }
+    p
+}
+
+#[test]
+fn converter_with_recognizers_can_be_registered() {
+    fn send_sync_static<T: Send + Sync + 'static>(_: &T) {}
+    let converter = converter_with(vec![Arc::new(NamesEverything)]);
+    send_sync_static(&converter);
+    let mut registry = TransactionConverterRegistry::new();
+    registry.register::<BitcoinTransactionWrapper, _>(Chain::Bitcoin, converter);
+    assert!(registry.get_converter(&Chain::Bitcoin).is_some());
+}
+
 #[test]
 fn no_recognizers_change_nothing() {
     for name in VALID_FIXTURES {
         let input = read_input(name);
         let plain = convert_json(&input);
-        let hooked = BitcoinVisualSignConverter::new(Network::Bitcoin)
-            .with_recognizers(&[])
+        let hooked = converter_with(Vec::new())
             .to_visual_sign_payload_from_string(&input, VisualSignOptions::default())
             .unwrap()
             .payload
@@ -1195,8 +1250,8 @@ fn no_recognizers_change_nothing() {
 #[test]
 fn recognizer_names_a_bare_output_and_the_hex_stays() {
     let script = bare_multisig_script();
-    let r = Recorder::new(script.clone(), "Toy bare script");
-    let json = json_with(&bare_script_output(), &[&r]).unwrap();
+    let r = Arc::new(Recorder::new(script.clone(), "Toy bare script"));
+    let json = json_with(&bare_script_output(), vec![r.clone()]).unwrap();
     assert!(
         json.contains(r#""Label":"Recognized Script","TextV2":{"Text":"Toy bare script"}"#),
         "{json}"
@@ -1213,7 +1268,7 @@ fn recognizer_names_a_bare_output_and_the_hex_stays() {
         "{json}"
     );
     assert_eq!(
-        *r.calls.borrow(),
+        r.calls(),
         vec![(script.to_hex_string(), ScriptSource::Output)]
     );
 }
@@ -1221,15 +1276,15 @@ fn recognizer_names_a_bare_output_and_the_hex_stays() {
 #[test]
 fn recognizer_names_a_verified_bare_input() {
     let script = bare_multisig_script();
-    let r = Recorder::new(script.clone(), "Toy bare script");
-    let json = json_with(&bare_script_input(), &[&r]).unwrap();
+    let r = Arc::new(Recorder::new(script.clone(), "Toy bare script"));
+    let json = json_with(&bare_script_input(), vec![r.clone()]).unwrap();
     assert!(
         json.contains(r#""Subtitle":{"Text":"0.00100000 BTC from Toy bare script"}"#),
         "{json}"
     );
     assert!(json.contains(&script.to_hex_string()), "{json}");
     assert_eq!(
-        *r.calls.borrow(),
+        r.calls(),
         vec![(script.to_hex_string(), ScriptSource::VerifiedPrevout)]
     );
 }
@@ -1240,10 +1295,10 @@ fn recognizer_is_told_a_witness_utxo_script_is_only_claimed() {
     let mut p = bare_script_input();
     let prev = p.inputs[0].non_witness_utxo.take().unwrap();
     p.inputs[0].witness_utxo = Some(prev.output[0].clone());
-    let r = Recorder::new(script.clone(), "Toy bare script");
-    let json = json_with(&p, &[&r]).unwrap();
+    let r = Arc::new(Recorder::new(script.clone(), "Toy bare script"));
+    let json = json_with(&p, vec![r.clone()]).unwrap();
     assert_eq!(
-        *r.calls.borrow(),
+        r.calls(),
         vec![(script.to_hex_string(), ScriptSource::ClaimedPrevout)]
     );
     // Gap closed for claimed inputs too: the bytes are shown.
@@ -1252,54 +1307,133 @@ fn recognizer_is_told_a_witness_utxo_script_is_only_claimed() {
 }
 
 #[test]
-fn recognizer_is_never_asked_about_standard_scripts() {
-    let r = Recorder::new(p2wpkh("m/84'/0'/0'/0/0"), "Not shown");
+fn recognizer_is_never_asked_about_scripts_with_an_address() {
+    let r = Arc::new(Recorder::new(p2wpkh("m/84'/0'/0'/0/0"), "Not shown"));
     for p in [p2wpkh_single_sig(), p2tr_single_sig(), tr_multi_a_nums()] {
-        let json = json_with(&p, &[&r]).unwrap();
+        let json = json_with(&p, vec![r.clone()]).unwrap();
         assert!(!json.contains("Not shown"), "{json}");
     }
-    assert!(r.calls.borrow().is_empty());
+    assert!(r.calls().is_empty());
+}
+
+#[test]
+fn an_address_is_never_replaced_or_joined_by_a_recognized_name() {
+    // Witness v2 and pay-to-anchor have an address form but a non-standard
+    // type. One rule decides "bare": no address form. So these are shown by
+    // address, the recognizer is not asked, and no name appears.
+    let p = addressable_non_standard_outputs();
+    let plain = json_of(&p);
+    let json = json_with(&p, vec![Arc::new(NamesEverything)]).unwrap();
+    assert!(!json.contains("Everything"), "{json}");
+    assert!(!json.contains("Recognized Script"), "{json}");
+    assert_eq!(json, plain);
+    for prefix in ["bc1z", "bc1pfeessrawgf"] {
+        assert!(
+            json.contains(&format!(r#""Subtitle":{{"Text":"{prefix}"#)),
+            "{prefix} missing in {json}"
+        );
+    }
 }
 
 #[test]
 fn first_recognizer_that_names_a_script_wins() {
     let script = bare_multisig_script();
-    let first = Recorder::new(script.clone(), "First");
-    let second = Recorder::new(script, "Second");
-    let json = json_with(&bare_script_output(), &[&first, &second]).unwrap();
+    let first = Arc::new(Recorder::new(script.clone(), "First"));
+    let second = Arc::new(Recorder::new(script, "Second"));
+    let json = json_with(&bare_script_output(), vec![first, second.clone()]).unwrap();
     assert!(json.contains("First") && !json.contains("Second"), "{json}");
-    assert!(second.calls.borrow().is_empty());
+    assert!(second.calls().is_empty());
 }
 
 #[test]
 fn recognizer_rows_follow_the_name() {
-    let mut r = Recorder::new(bare_multisig_script(), "Toy bare script");
-    r.fields = vec![("Policy".into(), "1 of 1 bare multisig".into())];
-    let json = json_with(&bare_script_output(), &[&r]).unwrap();
+    let r = Recorder::with_fields(
+        bare_multisig_script(),
+        "Toy bare script",
+        vec![("Policy".into(), "1 of 1 bare multisig".into())],
+    );
+    let json = json_with(&bare_script_output(), vec![Arc::new(r)]).unwrap();
     assert!(
         json.contains(r#""Label":"Recognized Script","TextV2":{"Text":"Toy bare script"},"Type":"text_v2"},{"FallbackText":"1 of 1 bare multisig","Label":"Policy""#),
         "{json}"
     );
 }
 
+fn refused(result: &Result<String, VisualSignError>) -> bool {
+    matches!(result, Err(e) if e.to_string().contains("recognizer output rejected"))
+}
+
 #[test]
-fn recognizer_text_is_held_to_the_display_rules() {
+fn recognizer_text_is_checked_where_it_enters() {
     let long = "a".repeat(257);
-    let bad: [(&str, Vec<(String, String)>); 6] = [
+    let bad: [(&str, Vec<(String, String)>); 7] = [
         ("", vec![]),
         ("caf\u{e9}", vec![]),
         ("tab\there", vec![]),
         (long.as_str(), vec![]),
         ("ok", vec![("".into(), "x".into())]),
-        ("ok", vec![("k".into(), "x".into()); 9]),
+        ("ok", vec![("k".into(), "".into())]),
+        (
+            "ok",
+            (0..9).map(|i| (format!("k{i}"), "x".into())).collect(),
+        ),
     ];
     for (name, fields) in bad {
-        let mut r = Recorder::new(bare_multisig_script(), name);
-        r.fields = fields;
-        let result = json_with(&bare_script_output(), &[&r]);
-        assert!(result.is_err(), "{name:?} accepted: {result:?}");
+        let r = Recorder::with_fields(bare_multisig_script(), name, fields);
+        let result = json_with(&bare_script_output(), vec![Arc::new(r)]);
+        assert!(refused(&result), "{name:?}: {result:?}");
     }
-    let mut r = Recorder::new(bare_multisig_script(), &"a".repeat(256));
-    r.fields = vec![("k".into(), "x".into()); 8];
-    assert!(json_with(&bare_script_output(), &[&r]).is_ok());
+    let r = Recorder::with_fields(
+        bare_multisig_script(),
+        &"a".repeat(256),
+        (0..8).map(|i| (format!("k{i}"), "x".into())).collect(),
+    );
+    assert!(json_with(&bare_script_output(), vec![Arc::new(r)]).is_ok());
+}
+
+#[test]
+fn recognizer_rows_cannot_reuse_parser_labels() {
+    let reserved = [
+        "Amount",
+        "Address",
+        "Fee",
+        "Script",
+        "Script Type",
+        "Amount Source",
+        "Sighash Type",
+        "Outpoint",
+        "Sequence",
+        "Multisig",
+        "Cosigner 1",
+        "Internal Key",
+        "Internal Key Warning",
+        "Script Status",
+        "Recognized Script",
+        "Version",
+        "Lock Time",
+        "Address Encoding",
+        "Input 0",
+        "Output 3",
+        "amount",
+        " Fee",
+        "SCRIPT TYPE",
+    ];
+    for label in reserved {
+        let r = Recorder::with_fields(
+            bare_multisig_script(),
+            "Toy bare script",
+            vec![(label.into(), "x".into())],
+        );
+        let result = json_with(&bare_script_output(), vec![Arc::new(r)]);
+        assert!(refused(&result), "{label:?}: {result:?}");
+    }
+    let twice = Recorder::with_fields(
+        bare_multisig_script(),
+        "Toy bare script",
+        vec![("Policy".into(), "a".into()), ("policy".into(), "b".into())],
+    );
+    assert!(refused(&json_with(
+        &bare_script_output(),
+        vec![Arc::new(twice)]
+    )));
 }

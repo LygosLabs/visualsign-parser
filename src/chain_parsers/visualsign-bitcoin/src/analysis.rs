@@ -14,6 +14,7 @@
 
 use crate::scripts::{self, ScriptDetail, ScriptRecognizer, ScriptSource};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use bitcoin::psbt::{Input, Psbt};
 use bitcoin::{Address, Amount, Network, OutPoint, Script, ScriptBuf, Sequence, TxIn, TxOut};
@@ -25,6 +26,9 @@ pub enum BitcoinParserError {
     FailedToDecodeTransaction(String),
     #[error("Malformed PSBT: {0}")]
     Malformed(String),
+    /// A [`crate::ScriptRecognizer`] returned text the parser will not show.
+    #[error("Script recognizer output rejected: {0}")]
+    RecognizerOutput(String),
 }
 
 /// How an input amount is known.
@@ -91,7 +95,7 @@ const NON_STANDARD: &str = "non-standard";
 pub fn analyze(
     psbt: &Psbt,
     network: Network,
-    recognizers: &[&dyn ScriptRecognizer],
+    recognizers: &[Arc<dyn ScriptRecognizer>],
 ) -> Result<Analysis, BitcoinParserError> {
     validate_psbt_version(psbt)?;
     let tx = &psbt.unsigned_tx;
@@ -127,10 +131,9 @@ pub fn analyze(
         let script_type = prevout.map(|o| script_type(&o.script_pubkey));
         let mut details =
             scripts::input_scripts(input, prevout.map(|o| o.script_pubkey.as_script()));
-        if let (Some(out), Some(NON_STANDARD), Some(src)) =
-            (prevout, script_type, prevout_source(source))
-        {
-            details.extend(scripts::recognize(recognizers, &out.script_pubkey, src));
+        // Bare: no address form. The same rule shows the raw hex below.
+        if let (Some(out), None, Some(src)) = (prevout, &address, prevout_source(source)) {
+            details.extend(scripts::recognize(recognizers, &out.script_pubkey, src)?);
         }
         inputs.push(InputInfo {
             outpoint: txin.previous_output,
@@ -156,20 +159,21 @@ pub fn analyze(
             .checked_add(out.value)
             .ok_or_else(|| BitcoinParserError::Malformed("output total overflows".into()))?;
         check_money_range(output_total, "output total")?;
-        let script_type = script_type(&out.script_pubkey);
+        let address = address(&out.script_pubkey, network);
         let mut details = scripts::output_scripts(meta, &out.script_pubkey);
-        if script_type == NON_STANDARD {
+        // Bare: no address form, the same rule that shows the raw hex.
+        if address.is_none() {
             details.extend(scripts::recognize(
                 recognizers,
                 &out.script_pubkey,
                 ScriptSource::Output,
-            ));
+            )?);
         }
         outputs.push(OutputInfo {
             amount: out.value,
-            address: address(&out.script_pubkey, network),
+            address,
             script_hex: out.script_pubkey.to_hex_string(),
-            script_type,
+            script_type: script_type(&out.script_pubkey),
             scripts: details,
         });
     }

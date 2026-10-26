@@ -6,10 +6,12 @@
 //! block or the tap tree). Anything else is reported as unrecognized, with the
 //! raw script, so a PSBT cannot make a spend look like a different policy.
 //!
-//! Bare (non-standard) scripts have no template here. A caller that knows such
-//! scripts can name them through a [`ScriptRecognizer`]; the parser tells it
-//! where each script came from ([`ScriptSource`]) and still shows the raw bytes.
+//! Bare scripts (no address form) have no template here. A caller that knows
+//! such scripts can name them through a [`ScriptRecognizer`]; the parser tells
+//! it where each script came from ([`ScriptSource`]), checks what it returns,
+//! and still shows the raw bytes.
 
+use crate::analysis::BitcoinParserError;
 use bitcoin::bip32::{DerivationPath, Fingerprint};
 use bitcoin::opcodes::all::{OP_CHECKMULTISIG, OP_CHECKSIG, OP_CHECKSIGADD, OP_NUMEQUAL};
 use bitcoin::psbt::{Input, Output};
@@ -19,6 +21,7 @@ use bitcoin::taproot::{TapLeafHash, TaprootSpendInfo};
 use bitcoin::{Script, ScriptBuf};
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// BIP-341 NUMS point: an internal key nobody can sign for.
 const NUMS_HEX: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
@@ -65,34 +68,129 @@ pub enum ScriptSource {
 }
 
 /// A name and optional label/value rows for a script, returned by a
-/// [`ScriptRecognizer`]. All text must be printable ASCII. The parser refuses
-/// to render empty text, text over 256 bytes, or more than 8 rows.
+/// [`ScriptRecognizer`]. The parser checks it as soon as it is returned and
+/// fails the conversion if any text is empty, longer than
+/// [`MAX_RECOGNIZED_TEXT`] bytes or not printable ASCII, if there are more than
+/// [`MAX_RECOGNIZED_FIELDS`] rows, or if a row label repeats another row's or
+/// is one the parser itself writes ([`RESERVED_LABELS`],
+/// [`RESERVED_LABEL_PREFIXES`]; compared ignoring ASCII case and surrounding
+/// spaces).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RecognizedScript {
     pub name: String,
     pub fields: Vec<(String, String)>,
 }
 
-/// Names bare (non-standard) scripts the parser has no template for.
+/// Most rows one [`RecognizedScript`] may carry.
+pub const MAX_RECOGNIZED_FIELDS: usize = 8;
+/// Longest text, in bytes, of a [`RecognizedScript`] name, label or value.
+pub const MAX_RECOGNIZED_TEXT: usize = 256;
+
+/// Every fixed label the parser writes, at the top level or inside an input or
+/// output. A recognizer row may not use one.
+pub const RESERVED_LABELS: &[&str] = &[
+    "Address Encoding",
+    "Outpoint",
+    "Sequence",
+    "Address",
+    "Script",
+    "Script Type",
+    "Amount",
+    "Amount Source",
+    "Sighash Type",
+    "Multisig",
+    "Internal Key",
+    "Internal Key Warning",
+    "Script Status",
+    "Recognized Script",
+    "Fee",
+    "Version",
+    "Lock Time",
+];
+
+/// Prefixes of the numbered labels the parser writes (`Cosigner 1`,
+/// `Input 0`, `Output 0`). A recognizer row label may not start with one.
+pub const RESERVED_LABEL_PREFIXES: &[&str] = &["Cosigner ", "Input ", "Output "];
+
+/// Names bare scripts: scripts with no address form, which the parser can
+/// only show as raw hex.
 ///
-/// Called for every output script and every spent (input prevout) script whose
-/// script type is non-standard; never for scripts with a standard template.
+/// Called for every output script and every spent (input prevout) script that
+/// has no address form; never for a script the parser shows as an address.
 /// The first recognizer that returns `Some` wins. The raw script is shown
-/// either way, so a recognizer adds a name; it cannot hide bytes.
-pub trait ScriptRecognizer: std::fmt::Debug {
+/// either way, so a recognizer adds a name; it cannot hide bytes or replace an
+/// address. `Send + Sync`, so a converter holding recognizers can be
+/// registered like any other.
+pub trait ScriptRecognizer: std::fmt::Debug + Send + Sync {
     fn recognize(&self, script_pubkey: &Script, source: ScriptSource) -> Option<RecognizedScript>;
 }
 
-/// The detail from the first recognizer that names `script_pubkey`.
+/// The checked detail from the first recognizer that names `script_pubkey`.
 pub fn recognize(
-    recognizers: &[&dyn ScriptRecognizer],
+    recognizers: &[Arc<dyn ScriptRecognizer>],
     script_pubkey: &Script,
     source: ScriptSource,
-) -> Option<ScriptDetail> {
-    recognizers
+) -> Result<Option<ScriptDetail>, BitcoinParserError> {
+    match recognizers
         .iter()
         .find_map(|r| r.recognize(script_pubkey, source))
-        .map(ScriptDetail::Custom)
+    {
+        Some(recognized) => {
+            check_recognized(&recognized)?;
+            Ok(Some(ScriptDetail::Custom(recognized)))
+        }
+        None => Ok(None),
+    }
+}
+
+fn rejected(why: String) -> BitcoinParserError {
+    BitcoinParserError::RecognizerOutput(why)
+}
+
+fn check_text(what: &str, text: &str) -> Result<(), BitcoinParserError> {
+    if text.is_empty()
+        || text.len() > MAX_RECOGNIZED_TEXT
+        || !text.bytes().all(|b| (0x20..=0x7e).contains(&b))
+    {
+        return Err(rejected(format!(
+            "{what} must be 1 to {MAX_RECOGNIZED_TEXT} printable ASCII characters"
+        )));
+    }
+    Ok(())
+}
+
+/// `label` with surrounding spaces removed and ASCII letters lowered.
+fn label_key(label: &str) -> String {
+    label.trim().to_ascii_lowercase()
+}
+
+fn is_reserved(label: &str) -> bool {
+    let key = label_key(label);
+    RESERVED_LABELS.iter().any(|r| key == label_key(r))
+        || RESERVED_LABEL_PREFIXES
+            .iter()
+            .any(|p| key.starts_with(&p.to_ascii_lowercase()))
+}
+
+fn check_recognized(recognized: &RecognizedScript) -> Result<(), BitcoinParserError> {
+    check_text("name", &recognized.name)?;
+    if recognized.fields.len() > MAX_RECOGNIZED_FIELDS {
+        return Err(rejected(format!("more than {MAX_RECOGNIZED_FIELDS} rows")));
+    }
+    let mut seen = BTreeSet::new();
+    for (label, value) in &recognized.fields {
+        check_text("row label", label)?;
+        check_text("row value", value)?;
+        if is_reserved(label) {
+            return Err(rejected(format!(
+                "row label '{label}' is one the parser writes"
+            )));
+        }
+        if !seen.insert(label_key(label)) {
+            return Err(rejected(format!("row label '{label}' repeats")));
+        }
+    }
+    Ok(())
 }
 
 type Origins = BTreeMap<Vec<u8>, String>;
