@@ -1469,6 +1469,10 @@ fn recognizer_rows_cannot_be_near_copies_of_parser_labels() {
         "Cosigner",
         "Lock-Time",
         "Sighash",
+        // Abbreviations of exactly 4 characters, the shortest refused.
+        "Addr",
+        "Lock",
+        "Amou",
         "Out-point",
         "-- Fee --",
         "SCRIPT_TYPE",
@@ -1501,6 +1505,9 @@ fn recognizer_rows_cannot_be_near_copies_of_parser_labels() {
         "Hash Lock",
         "Vault Index",
         "Owner",
+        // Three characters is below the abbreviation limit.
+        "Add",
+        "Loc",
     ] {
         let r = Recorder::with_fields(
             bare_multisig_script(),
