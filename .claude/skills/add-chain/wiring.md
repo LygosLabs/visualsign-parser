@@ -2,8 +2,8 @@
 
 Do these in order; later steps fail to compile without earlier ones. Paths are from the
 repo root. Snippets show the line to add for a chain `foo` (`Foo`, `CHAIN_FOO`); keep each
-list in the order the file already uses. `check-wiring.sh foo` verifies every step marked
-(c).
+list in the order the file already uses. `cargo run -q -p chain-wiring -- check foo` (from
+`src/`) verifies every step marked (c).
 
 ## Crate and workspace
 

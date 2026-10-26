@@ -1,6 +1,6 @@
 ---
 name: add-chain
-description: Add a new chain parser crate (visualsign-<chain>) and wire it into every place a chain must appear - proto, registry, parser_app, http-server, images, parser_cli, tests, CI metadata and docs. Covers the policy decisions the PR must state, the safety rules for untrusted input, the test standard, and the exact verify commands. Includes a read-only check-wiring.sh that reports every missing touch point, and tracking-issue.sh, which opens and refreshes a per-chain GitHub issue with milestone checklists (M0 scope to M6 production) so support completeness is visible.
+description: Add a new chain parser crate (visualsign-<chain>) and wire it into every place a chain must appear - proto, registry, parser_app, http-server, images, parser_cli, tests, CI metadata and docs. Covers the policy decisions the PR must state, the safety rules for untrusted input, the test standard, and the exact verify commands. Uses the chain-wiring tool (src/tools/chain-wiring) to report every missing touch point, a per-chain GitHub issue form with milestone checklists (M0 scope to M6 production) that a workflow keeps current, and a per-PR CI check.
 user-invocable: true
 ---
 
@@ -28,32 +28,50 @@ Follow this skill, not that page.
 4. Open the chain's tracking issue (see [Tracking issue](#tracking-issue)), unless one exists:
    `gh issue list --search "Chain support: <Variant> in:title"`.
 
+Run the tool from `src/`: `cargo run -q -p chain-wiring -- check <chain>` (add `--variant <Variant>`
+if it isn't the chain name capitalised). It's read-only, prints OK/MISSING/INFO per touch point and
+exits 1 on any MISSING. The touch points are data in `src/tools/chain-wiring/touchpoints.toml`.
+
 ## Tracking issue
 
 Every chain has one GitHub issue, "Chain support: `<Variant>`", that records how complete
-its support is. `tracking-issue.sh` writes it as task lists, one per milestone, so GitHub
-shows progress on the issue and wherever it's linked:
+its support is. Open it from the issue form:
+`https://github.com/anchorageoss/visualsign-parser/issues/new?template=chain-support.yml`.
+It holds one task list per milestone, so GitHub shows progress on the issue and wherever it's linked:
 
 | Milestone | Contents | Ticked by |
 |---|---|---|
 | M0 Scope and policy | proto slot, default-on/opt-in, network trust, C deps, vector sources | hand |
-| M1 Wiring | every touch point from `check-wiring.sh`, generated from the repo | the script |
+| M1 Wiring | every touch point from `chain-wiring`, generated from the default branch | the sync workflow |
 | M2 Parser safety and tests | one box per safety rule and per required test (Step 3) | hand |
 | M3 Property tests | proptest file, CI label run, regressions file | hand |
 | M4 Fuzzing | cargo-fuzz target, CI label run, seeded corpus | hand |
 | M5 iOS (C-free) | no `cc` for `aarch64-apple-ios`, `APPLE_NO_C_CRATES` | hand |
 | M6 Production | downstream integration, default-on, changelog published | hand |
 
-```bash
-.claude/skills/add-chain/tracking-issue.sh <chain>                 # print the body (dry run)
-.claude/skills/add-chain/tracking-issue.sh <chain> --create        # open it, labelled chain:<chain> if that label exists
-.claude/skills/add-chain/tracking-issue.sh <chain> --update <n>    # regenerate M1 only; hand ticks elsewhere are kept
-```
+M1 sits between `<!-- add-chain:wiring:start -->` and `<!-- add-chain:wiring:end -->`. The
+`chain-tracking-sync` workflow rewrites only that block, on every push to main that touches
+wiring and on demand (`gh workflow run chain-tracking-sync.yml`), so hand ticks elsewhere are
+kept. To preview it: `cargo run -q -p chain-wiring -- issue-body <chain>`.
 
-Refresh M1 with `--update` after each wiring change and before asking for review. A milestone
-that doesn't apply gets its boxes struck through with the reason (`- [x] ~~...~~ n/a: why`),
-never deleted, so "complete" always means every box was considered. Link each chain PR from
-the issue's Links section and reference the issue in the PR body.
+A milestone that doesn't apply gets its boxes struck through with the reason
+(`- [x] ~~...~~ n/a: why`), never deleted, so "complete" always means every box was considered.
+Link each chain PR from the issue's Links section and put `Tracks #<n>` in the PR body.
+
+## CI
+
+`chain-wiring-pr.yml` runs `chain-wiring pr-check` on each PR that touches a chain, the proto or
+the wiring files, and posts its result as the job summary and a sticky comment. It fails when:
+
+- a touch point is MISSING and isn't in `src/tools/chain-wiring/known-gaps.toml` (a new chain gets
+  no entries there, so it must be fully wired; it only inherits default-set gaps already listed);
+- the PR adds to `known-gaps.toml` (it may only shrink; the `chain-wiring:allow-gap` label overrides);
+- a new chain's PR body lacks a "Default-on or opt-in", "Network trust" or "C dependencies"
+  section, or a `Tracks #<n>` line;
+- the PR body or `APPLE_NO_C_CRATES` says the crate is C-free but `cargo tree ... -i cc` finds `cc`.
+
+It warns when a `CHAIN_*` slot the PR adds is also claimed on another open PR. `make -C src test`
+also fails on any chain's unlisted gap, and on a listed gap that's now fixed.
 
 ## Policy decisions the PR must state
 
@@ -64,7 +82,7 @@ Put each under its own heading in the PR body. Reviewers reject a chain PR that 
    integration needs the chain. Whatever you choose, keep these five sets identical:
    `parser_app` `default`, `http-server` `default`, `CHAIN_FEATURES` in
    `images/parser_app/Containerfile`, `images/parser_http_server/Containerfile` and
-   `.oss-scanner/Dockerfile`. `check-wiring.sh` compares them.
+   `.oss-scanner/Dockerfile`. `chain-wiring check` compares them.
    If opt-in, `make test` (default features) never runs the parser_app registry test:
    add `cargo test --no-fail-fast -p parser_app --features <chain> --lib` to the `test`
    target in `src/Makefile`.
@@ -115,12 +133,12 @@ Follow [wiring.md](wiring.md), in order. It has the exact file and snippet for e
 touch points. Then run:
 
 ```bash
-.claude/skills/add-chain/check-wiring.sh <chain>        # add <Variant> if not just capitalised
+cd src && cargo run -q -p chain-wiring -- check <chain>    # --variant <Variant> if not just capitalised
 ```
 
-It's read-only and exits 1 on any `MISSING`. `INFO` lines are the policy choices above;
-copy them into the PR. Existing chains still fail some checks (e.g. bitcoin has no CLI
-fixture, NEAR isn't in the README); that is debt on main, not a reason to skip yours.
+It exits 1 on any `MISSING`. `INFO` lines are the policy choices above; copy them into the PR.
+Existing chains still fail some checks (listed with reasons in `known-gaps.toml`); that is debt
+on main, not a reason to skip yours. If you fix one, delete its line there.
 
 ## Step 3: Tests
 
@@ -164,8 +182,7 @@ make -C src parser-cli-narrow-build-check          # parser_cli --features <chai
 make -C src unused-deps                            # needs cargo-machete 0.9.2
 make -C src apple-silicon-check                    # only if it exists (PR #587); macOS host
 make -C src feature-matrix-check                   # local only, slow; run once before review
-.claude/skills/add-chain/check-wiring.sh <chain>
-.claude/skills/add-chain/tracking-issue.sh <chain> --update <issue>   # M1 now matches the branch
+(cd src && cargo run -q -p chain-wiring -- check <chain>)
 ```
 
 Then decode a real vector through the CLI from `src/`:
@@ -184,7 +201,7 @@ are fixed:
 
 - **Wiring agent:** give it this skill's `wiring.md`, the chain names, the proto slot and
   the default-on/opt-in choice. It edits only files outside `visualsign-<chain>/` and
-  finishes when `check-wiring.sh <chain>` exits 0 and `make -C src narrow-build-check` passes.
+  finishes when `chain-wiring check <chain>` exits 0 and `make -C src narrow-build-check` passes.
 - **Test agent:** give it Step 3, the safety rules, and the vector sources. It edits only
   `visualsign-<chain>/tests/` (and `fuzz/` if in scope) and reports which safety rules have
   no test yet.
@@ -198,4 +215,4 @@ Review both diffs yourself before Step 4. Don't let either agent change proto sl
 - Amplification ratio and the caps chosen
 - Vector provenance list; oracle used (or why none)
 - Tracking issue link (`Tracks #<n>`); M3/M4 boxes stay open there if proptest + fuzz aren't in this PR
-- `check-wiring.sh <chain>` output
+- `chain-wiring check <chain>` output
