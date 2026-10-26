@@ -4,7 +4,8 @@
 #
 # Usage: lygos/check-all.sh [work-dir]
 # The work dir (default lygos/display-core/target/check-all) holds the wasm
-# build and, while they run, the reproducibility builds (removed on success).
+# build and, under repro.*, the logs of the reproducibility builds (the builds
+# themselves are removed on success).
 # Needs on PATH: cargo (rustup), node, and the exact build tools listed in
 # lygos/display-core/BUILD.md. CHECK_JOBS (default 3) caps cargo's jobs.
 set -euo pipefail
@@ -99,6 +100,5 @@ node scripts/run-goldens.mjs "$work/pkg"
 step "reproducible from three checkout paths (committed tree)"
 repro=$(mktemp -d "$work/repro.XXXXXX")
 CARGO_BUILD_JOBS="$jobs" nice -n 19 scripts/check-reproducible.sh "$repro" 3
-rmdir "$repro"
 
 printf '\nALL CHECKS PASSED\n'
