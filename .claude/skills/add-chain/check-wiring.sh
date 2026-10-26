@@ -15,7 +15,7 @@ chain="${1:?usage: check-wiring.sh <chain> [RustVariant]}"
 variant="${2:-$(printf '%s' "${chain:0:1}" | tr '[:lower:]' '[:upper:]')${chain:1}}"
 upper="$(printf '%s' "$chain" | tr '[:lower:]' '[:upper:]')"
 snake="${chain//-/_}"
-root="$(git rev-parse --show-toplevel)" || exit 2
+root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)" || exit 2
 cd "$root" || exit 2
 
 missing=0
