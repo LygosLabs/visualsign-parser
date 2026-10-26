@@ -240,6 +240,32 @@
         "lygos/check-all.sh"
       ],
       "reason": "Ours: a fully passing check-all exited 1 because it tried to remove the reproducibility dir that still holds the build logs; keep the logs."
+    },
+    {
+      "commit": "b56976d633d9bf7f92e429d9a7244f5981cc3ec9",
+      "subject": "test(bitcoin): pin the 4-character abbreviation limit",
+      "upstreamCandidate": true,
+      "files": [
+        "src/chain_parsers/visualsign-bitcoin/tests/lib_test.rs"
+      ],
+      "reason": "Upstream candidate: the near-copy test refuses 4-character abbreviations and accepts 3-character ones, so the abbreviation limit is tested."
+    },
+    {
+      "commit": "481ad3bc0c44e2dd5f0594d429f6e61818a143c9",
+      "subject": "fix(lygos): checks that cannot be moved, drift that cannot pass",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/check-all.sh",
+        "lygos/check-fork-patches.mjs",
+        "lygos/display-core/BUILD.md",
+        "lygos/display-core/LINKED-CRATES.txt",
+        "lygos/display-core/WALLET-RULES.md",
+        "lygos/display-core/scripts/build-root.sh",
+        "lygos/display-core/scripts/build-wasm.sh",
+        "lygos/display-core/scripts/check-chain-deps.sh",
+        "lygos/display-core/scripts/check-reproducible.sh"
+      ],
+      "reason": "Ours: pin the upstream base in the check and make the manifest append-only; build-wasm exits 1 on a hash mismatch and checks clang's libraries; a shared build dir; an exact allowlist of linked crates; BUILD.md platform and no-root route."
     }
   ]
 }
