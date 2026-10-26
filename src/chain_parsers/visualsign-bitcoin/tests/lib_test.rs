@@ -24,9 +24,10 @@ use bitcoin::script::Builder;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, XOnlyPublicKey};
 use bitcoin::taproot::{LeafVersion, TapLeafHash, TapTree, TaprootBuilder};
 use bitcoin::{
-    Address, Amount, EcdsaSighashType, Network, NetworkKind, OutPoint, ScriptBuf, Sequence,
+    Address, Amount, EcdsaSighashType, Network, NetworkKind, OutPoint, Script, ScriptBuf, Sequence,
     TapSighashType, Transaction, TxIn, TxOut, Txid, Witness, absolute, transaction,
 };
+use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -34,7 +35,10 @@ use visualsign::vsptrait::{
     Transaction as VsTransaction, VisualSignConverter, VisualSignConverterFromString,
     VisualSignError, VisualSignOptions,
 };
-use visualsign_bitcoin::{BitcoinTransactionWrapper, BitcoinVisualSignConverter};
+use visualsign_bitcoin::{
+    BitcoinTransactionWrapper, BitcoinVisualSignConverter, RecognizedScript, ScriptRecognizer,
+    ScriptSource,
+};
 
 // BIP-39 seed of "abandon abandon abandon abandon abandon abandon abandon abandon
 // abandon abandon abandon about" with an empty passphrase (BIP-84 / BIP-86 vectors).
@@ -304,6 +308,24 @@ fn tr_multi_a_internal_key_spend() -> Psbt {
     tr_multi_a_with(xonly("m/86'/0'/9'/0/0"), None)
 }
 
+/// Bare 1-of-1 `OP_CHECKMULTISIG` script: a real script with no address form.
+fn bare_multisig_script() -> ScriptBuf {
+    Builder::new()
+        .push_int(1)
+        .push_key(&bitcoin::PublicKey::new(pubkey("m/84'/0'/0'/0/0")))
+        .push_int(1)
+        .push_opcode(OP_CHECKMULTISIG)
+        .into_script()
+}
+
+/// Spend of a bare-script output, verified through its previous transaction.
+fn bare_script_input() -> Psbt {
+    let prev = prev_tx(bare_multisig_script(), 100_000, 30);
+    let mut p = spend(&prev, vec![txout(p2wpkh("m/84'/0'/7'/0/0"), 99_000)]);
+    p.inputs[0].non_witness_utxo = Some(prev);
+    p
+}
+
 fn hex_of(p: &Psbt) -> String {
     hex::encode(p.serialize())
 }
@@ -318,7 +340,7 @@ fn json_of(p: &Psbt) -> String {
 
 type SyntheticBuilder = (&'static str, fn() -> Psbt);
 
-const SYNTHETIC: [SyntheticBuilder; 7] = [
+const SYNTHETIC: [SyntheticBuilder; 8] = [
     ("synthetic-tr-multi-a-2of3", tr_multi_a_nums),
     (
         "synthetic-tr-multi-a-internal-key-spend",
@@ -335,10 +357,11 @@ const SYNTHETIC: [SyntheticBuilder; 7] = [
         p2wpkh_understated_witness_utxo,
     ),
     ("synthetic-p2tr-single-sig", p2tr_single_sig),
+    ("synthetic-bare-script-input", bare_script_input),
 ];
 
 /// PSBTs that must decode, with their golden output.
-static VALID_FIXTURES: [&str; 13] = [
+static VALID_FIXTURES: [&str; 14] = [
     "synthetic-tr-multi-a-2of3",
     "synthetic-tr-multi-a-internal-key-spend",
     "bip174-p2pkh",
@@ -352,6 +375,7 @@ static VALID_FIXTURES: [&str; 13] = [
     "synthetic-p2wpkh-single-sig",
     "synthetic-p2wpkh-no-prev-tx",
     "synthetic-p2tr-single-sig",
+    "synthetic-bare-script-input",
 ];
 
 /// PSBTs that must be rejected.
@@ -1083,4 +1107,199 @@ fn review_version_sequence_and_effective_locktime_are_displayed() {
         json.contains("0xfffffffe (does not signal replaceability; relative lock disabled)"),
         "{json}"
     );
+}
+
+#[test]
+fn bare_input_script_is_shown_in_full() {
+    let script_hex = bare_multisig_script().to_hex_string();
+    let json = json_of(&bare_script_input());
+    assert!(
+        json.contains(&format!(
+            "{{\"FallbackText\":\"{script_hex}\",\"Label\":\"Script\""
+        )),
+        "{json}"
+    );
+    assert!(json.contains("non-standard"), "{json}");
+}
+
+// ---------------------------------------------------------------------------
+// Script recognizers
+// ---------------------------------------------------------------------------
+
+/// Names one exact script and records every call it gets.
+#[derive(Debug)]
+struct Recorder {
+    script: ScriptBuf,
+    name: String,
+    fields: Vec<(String, String)>,
+    calls: RefCell<Vec<(String, ScriptSource)>>,
+}
+
+impl Recorder {
+    fn new(script: ScriptBuf, name: &str) -> Self {
+        Self {
+            script,
+            name: name.to_string(),
+            fields: Vec::new(),
+            calls: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl ScriptRecognizer for Recorder {
+    fn recognize(&self, script_pubkey: &Script, source: ScriptSource) -> Option<RecognizedScript> {
+        self.calls
+            .borrow_mut()
+            .push((script_pubkey.to_hex_string(), source));
+        (script_pubkey == self.script.as_script()).then(|| RecognizedScript {
+            name: self.name.clone(),
+            fields: self.fields.clone(),
+        })
+    }
+}
+
+fn json_with(p: &Psbt, recognizers: &[&dyn ScriptRecognizer]) -> Result<String, VisualSignError> {
+    BitcoinVisualSignConverter::new(Network::Bitcoin)
+        .with_recognizers(recognizers)
+        .to_visual_sign_payload_from_string(&encode(p), VisualSignOptions::default())
+        .map(|r| r.payload.to_json().unwrap())
+}
+
+/// The single-sig spend plus a third output paying the bare script.
+fn bare_script_output() -> Psbt {
+    let mut p = p2wpkh_single_sig();
+    p.unsigned_tx.output[1].value = Amount::from_sat(29_000);
+    p.unsigned_tx
+        .output
+        .push(txout(bare_multisig_script(), 10_000));
+    p.outputs.push(Default::default());
+    p
+}
+
+#[test]
+fn no_recognizers_change_nothing() {
+    for name in VALID_FIXTURES {
+        let input = read_input(name);
+        let plain = convert_json(&input);
+        let hooked = BitcoinVisualSignConverter::new(Network::Bitcoin)
+            .with_recognizers(&[])
+            .to_visual_sign_payload_from_string(&input, VisualSignOptions::default())
+            .unwrap()
+            .payload
+            .to_json()
+            .unwrap();
+        assert_eq!(plain, hooked, "{name}");
+    }
+}
+
+#[test]
+fn recognizer_names_a_bare_output_and_the_hex_stays() {
+    let script = bare_multisig_script();
+    let r = Recorder::new(script.clone(), "Toy bare script");
+    let json = json_with(&bare_script_output(), &[&r]).unwrap();
+    assert!(
+        json.contains(r#""Label":"Recognized Script","TextV2":{"Text":"Toy bare script"}"#),
+        "{json}"
+    );
+    assert!(
+        json.contains(&format!(
+            r#""Label":"Script","TextV2":{{"Text":"{}"}}"#,
+            script.to_hex_string()
+        )),
+        "{json}"
+    );
+    assert!(
+        json.contains(r#""Subtitle":{"Text":"Toy bare script 0.00010000 BTC"}"#),
+        "{json}"
+    );
+    assert_eq!(
+        *r.calls.borrow(),
+        vec![(script.to_hex_string(), ScriptSource::Output)]
+    );
+}
+
+#[test]
+fn recognizer_names_a_verified_bare_input() {
+    let script = bare_multisig_script();
+    let r = Recorder::new(script.clone(), "Toy bare script");
+    let json = json_with(&bare_script_input(), &[&r]).unwrap();
+    assert!(
+        json.contains(r#""Subtitle":{"Text":"0.00100000 BTC from Toy bare script"}"#),
+        "{json}"
+    );
+    assert!(json.contains(&script.to_hex_string()), "{json}");
+    assert_eq!(
+        *r.calls.borrow(),
+        vec![(script.to_hex_string(), ScriptSource::VerifiedPrevout)]
+    );
+}
+
+#[test]
+fn recognizer_is_told_a_witness_utxo_script_is_only_claimed() {
+    let script = bare_multisig_script();
+    let mut p = bare_script_input();
+    let prev = p.inputs[0].non_witness_utxo.take().unwrap();
+    p.inputs[0].witness_utxo = Some(prev.output[0].clone());
+    let r = Recorder::new(script.clone(), "Toy bare script");
+    let json = json_with(&p, &[&r]).unwrap();
+    assert_eq!(
+        *r.calls.borrow(),
+        vec![(script.to_hex_string(), ScriptSource::ClaimedPrevout)]
+    );
+    // Gap closed for claimed inputs too: the bytes are shown.
+    assert!(json.contains(&script.to_hex_string()), "{json}");
+    assert!(json.contains("claimed by witness_utxo only"), "{json}");
+}
+
+#[test]
+fn recognizer_is_never_asked_about_standard_scripts() {
+    let r = Recorder::new(p2wpkh("m/84'/0'/0'/0/0"), "Not shown");
+    for p in [p2wpkh_single_sig(), p2tr_single_sig(), tr_multi_a_nums()] {
+        let json = json_with(&p, &[&r]).unwrap();
+        assert!(!json.contains("Not shown"), "{json}");
+    }
+    assert!(r.calls.borrow().is_empty());
+}
+
+#[test]
+fn first_recognizer_that_names_a_script_wins() {
+    let script = bare_multisig_script();
+    let first = Recorder::new(script.clone(), "First");
+    let second = Recorder::new(script, "Second");
+    let json = json_with(&bare_script_output(), &[&first, &second]).unwrap();
+    assert!(json.contains("First") && !json.contains("Second"), "{json}");
+    assert!(second.calls.borrow().is_empty());
+}
+
+#[test]
+fn recognizer_rows_follow_the_name() {
+    let mut r = Recorder::new(bare_multisig_script(), "Toy bare script");
+    r.fields = vec![("Policy".into(), "1 of 1 bare multisig".into())];
+    let json = json_with(&bare_script_output(), &[&r]).unwrap();
+    assert!(
+        json.contains(r#""Label":"Recognized Script","TextV2":{"Text":"Toy bare script"},"Type":"text_v2"},{"FallbackText":"1 of 1 bare multisig","Label":"Policy""#),
+        "{json}"
+    );
+}
+
+#[test]
+fn recognizer_text_is_held_to_the_display_rules() {
+    let long = "a".repeat(257);
+    let bad: [(&str, Vec<(String, String)>); 6] = [
+        ("", vec![]),
+        ("caf\u{e9}", vec![]),
+        ("tab\there", vec![]),
+        (long.as_str(), vec![]),
+        ("ok", vec![("".into(), "x".into())]),
+        ("ok", vec![("k".into(), "x".into()); 9]),
+    ];
+    for (name, fields) in bad {
+        let mut r = Recorder::new(bare_multisig_script(), name);
+        r.fields = fields;
+        let result = json_with(&bare_script_output(), &[&r]);
+        assert!(result.is_err(), "{name:?} accepted: {result:?}");
+    }
+    let mut r = Recorder::new(bare_multisig_script(), &"a".repeat(256));
+    r.fields = vec![("k".into(), "x".into()); 8];
+    assert!(json_with(&bare_script_output(), &[&r]).is_ok());
 }

@@ -16,7 +16,7 @@ The Bitcoin module decodes Partially Signed Bitcoin Transactions (PSBTs) into Vi
 
 The Bitcoin parser produces:
 - `Address Encoding`, explicitly marked `transaction network unknown`: the chosen encoding does not establish the transaction's network. The enclave uses mainnet encoding; the CLI accepts the selection above.
-- One expandable `Input N` per input: outpoint, address, script type, amount, and where the amount came from. A `witness_utxo`-only amount is also marked `claimed amount, unverified` in the preview subtitle.
+- One expandable `Input N` per input: outpoint, address (or the raw spent script when it has no address form), script type, amount, and where the amount came from. A `witness_utxo`-only amount is also marked `claimed amount, unverified` in the preview subtitle.
 - One expandable `Output N` per output: address (or the raw script for `OP_RETURN` and other non-address scripts), script type and amount.
 - Multisig details inside an input or output when the PSBT carries a recognized script: `Multisig` (threshold, script kind), `Cosigner N` (key and origin), and for taproot the `Internal Key`.
 - `Fee`, transaction `Version`, per-input `Sequence` (replaceability signaling and BIP-68 relative locks), and effective `Lock Time` when non-zero. Lock time distinguishes block heights from Unix timestamps and is marked inactive when all input sequences are final.
@@ -38,6 +38,7 @@ The parser holds no keys. It checks what a PSBT can prove on its own and flags t
 | An input or output carries a `witness_script` (wsh, optionally P2SH-wrapped) or tap leaf scripts | If the script is bound to the output (script hash, or taproot commitment through the control block or tap tree) and matches `multi`/`sortedmulti` or `multi_a` with distinct keys, the threshold, cosigner keys and key origins are shown. Anything else is shown raw as `unrecognized script`. |
 | Taproot multisig whose internal key is not the BIP-341 NUMS point | `Internal Key Warning: internal key can spend alone` |
 | Input requests NONE, SINGLE, either mode with ANYONECANPAY, or an invalid sighash | Rejected: this preview requires a commitment to every displayed output. This also refuses the legacy out-of-range SINGLE constant-hash case. |
+| An input spends, or an output pays, a bare (non-standard) script | Shown as the raw `Script` hex with `Script Type: non-standard`. A caller-supplied `ScriptRecognizer` may add a `Recognized Script` name (and label/value rows, printable ASCII only); the raw script stays. Recognizers are only asked about non-standard scripts, and are told whether a spent script is verified through `non_witness_utxo` or only claimed by `witness_utxo`. |
 | Input requests ALL with ANYONECANPAY | Accepted with a `Sighash Type` field and `Fee` shown as `unknown (claimed X BTC; unverified: ...)`: every output is committed, but other inputs can change. |
 
 Change verification (deriving a change key from an account xpub) needs wallet context the parser does not have, and belongs in the signer. The signer must enforce the PSBT sighash requests when producing signatures. The parser does not validate existing signatures or query the chain to confirm that inputs are unspent.

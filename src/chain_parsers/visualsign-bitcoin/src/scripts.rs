@@ -5,6 +5,10 @@
 //! belongs to (witness script hash, or taproot commitment through the control
 //! block or the tap tree). Anything else is reported as unrecognized, with the
 //! raw script, so a PSBT cannot make a spend look like a different policy.
+//!
+//! Bare (non-standard) scripts have no template here. A caller that knows such
+//! scripts can name them through a [`ScriptRecognizer`]; the parser tells it
+//! where each script came from ([`ScriptSource`]) and still shows the raw bytes.
 
 use bitcoin::bip32::{DerivationPath, Fingerprint};
 use bitcoin::opcodes::all::{OP_CHECKMULTISIG, OP_CHECKSIG, OP_CHECKSIGADD, OP_NUMEQUAL};
@@ -43,6 +47,52 @@ pub enum ScriptDetail {
         script_hex: String,
         reason: &'static str,
     },
+    /// A bare script named by a caller-supplied [`ScriptRecognizer`].
+    Custom(RecognizedScript),
+}
+
+/// Where a script handed to a [`ScriptRecognizer`] comes from.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ScriptSource {
+    /// An output of the unsigned transaction: part of the bytes being signed.
+    Output,
+    /// The output an input spends, taken from a `non_witness_utxo` that hashes
+    /// to the prevout txid.
+    VerifiedPrevout,
+    /// The output an input spends, taken from `witness_utxo` only. Nothing
+    /// binds it to the real prevout, so it is a claim.
+    ClaimedPrevout,
+}
+
+/// A name and optional label/value rows for a script, returned by a
+/// [`ScriptRecognizer`]. All text must be printable ASCII. The parser refuses
+/// to render empty text, text over 256 bytes, or more than 8 rows.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RecognizedScript {
+    pub name: String,
+    pub fields: Vec<(String, String)>,
+}
+
+/// Names bare (non-standard) scripts the parser has no template for.
+///
+/// Called for every output script and every spent (input prevout) script whose
+/// script type is non-standard; never for scripts with a standard template.
+/// The first recognizer that returns `Some` wins. The raw script is shown
+/// either way, so a recognizer adds a name; it cannot hide bytes.
+pub trait ScriptRecognizer: std::fmt::Debug {
+    fn recognize(&self, script_pubkey: &Script, source: ScriptSource) -> Option<RecognizedScript>;
+}
+
+/// The detail from the first recognizer that names `script_pubkey`.
+pub fn recognize(
+    recognizers: &[&dyn ScriptRecognizer],
+    script_pubkey: &Script,
+    source: ScriptSource,
+) -> Option<ScriptDetail> {
+    recognizers
+        .iter()
+        .find_map(|r| r.recognize(script_pubkey, source))
+        .map(ScriptDetail::Custom)
 }
 
 type Origins = BTreeMap<Vec<u8>, String>;

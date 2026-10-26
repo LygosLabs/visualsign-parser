@@ -12,7 +12,7 @@
 //! ALL / DEFAULT signature without ANYONECANPAY commits to all input amounts
 //! and outputs, so whichever input gets signed binds the rest).
 
-use crate::scripts::{self, ScriptDetail};
+use crate::scripts::{self, ScriptDetail, ScriptRecognizer, ScriptSource};
 use std::collections::BTreeSet;
 
 use bitcoin::psbt::{Input, Psbt};
@@ -45,10 +45,13 @@ pub struct InputInfo {
     pub amount: Option<Amount>,
     pub source: AmountSource,
     pub address: Option<String>,
+    /// The spent script, when it has no address form (a bare script).
+    pub script_hex: Option<String>,
     pub script_type: Option<&'static str>,
     /// Set when the PSBT asks for a sighash type other than ALL / DEFAULT.
     pub sighash_warning: Option<String>,
-    /// Multisig / script details from the witness script or tap leaf scripts.
+    /// Multisig / script details from the witness script or tap leaf scripts,
+    /// plus any name a recognizer gave a bare spent script.
     pub scripts: Vec<ScriptDetail>,
 }
 
@@ -81,7 +84,15 @@ pub struct Analysis {
 const UNVERIFIED_REASON: &str =
     "input amounts come from witness_utxo without a matching previous transaction";
 
-pub fn analyze(psbt: &Psbt, network: Network) -> Result<Analysis, BitcoinParserError> {
+/// Script type of any script without a standard template.
+const NON_STANDARD: &str = "non-standard";
+
+/// `recognizers` may name bare scripts; see [`ScriptRecognizer`].
+pub fn analyze(
+    psbt: &Psbt,
+    network: Network,
+    recognizers: &[&dyn ScriptRecognizer],
+) -> Result<Analysis, BitcoinParserError> {
     validate_psbt_version(psbt)?;
     let tx = &psbt.unsigned_tx;
     // Bound display expansion by the standard transaction weight limit. This
@@ -112,15 +123,28 @@ pub fn analyze(psbt: &Psbt, network: Network) -> Result<Analysis, BitcoinParserE
         }
         let is_taproot = prevout.is_some_and(|o| o.script_pubkey.is_p2tr());
         prevout_scripts.push(prevout.map(|o| o.script_pubkey.clone()));
+        let address = prevout.and_then(|o| address(&o.script_pubkey, network));
+        let script_type = prevout.map(|o| script_type(&o.script_pubkey));
+        let mut details =
+            scripts::input_scripts(input, prevout.map(|o| o.script_pubkey.as_script()));
+        if let (Some(out), Some(NON_STANDARD), Some(src)) =
+            (prevout, script_type, prevout_source(source))
+        {
+            details.extend(scripts::recognize(recognizers, &out.script_pubkey, src));
+        }
         inputs.push(InputInfo {
             outpoint: txin.previous_output,
             sequence: txin.sequence,
             amount: prevout.map(|o| o.value),
             source,
-            address: prevout.and_then(|o| address(&o.script_pubkey, network)),
-            script_type: prevout.map(|o| script_type(&o.script_pubkey)),
+            script_hex: match (prevout, &address) {
+                (Some(out), None) => Some(out.script_pubkey.to_hex_string()),
+                _ => None,
+            },
+            address,
+            script_type,
             sighash_warning: validate_sighash(input, is_taproot)?,
-            scripts: scripts::input_scripts(input, prevout.map(|o| o.script_pubkey.as_script())),
+            scripts: details,
         });
     }
 
@@ -132,12 +156,21 @@ pub fn analyze(psbt: &Psbt, network: Network) -> Result<Analysis, BitcoinParserE
             .checked_add(out.value)
             .ok_or_else(|| BitcoinParserError::Malformed("output total overflows".into()))?;
         check_money_range(output_total, "output total")?;
+        let script_type = script_type(&out.script_pubkey);
+        let mut details = scripts::output_scripts(meta, &out.script_pubkey);
+        if script_type == NON_STANDARD {
+            details.extend(scripts::recognize(
+                recognizers,
+                &out.script_pubkey,
+                ScriptSource::Output,
+            ));
+        }
         outputs.push(OutputInfo {
             amount: out.value,
             address: address(&out.script_pubkey, network),
             script_hex: out.script_pubkey.to_hex_string(),
-            script_type: script_type(&out.script_pubkey),
-            scripts: scripts::output_scripts(meta, &out.script_pubkey),
+            script_type,
+            scripts: details,
         });
     }
 
@@ -194,6 +227,15 @@ fn compute_fee(
             reason: UNVERIFIED_REASON,
         }
     })
+}
+
+/// How far a recognizer can trust a spent script: as far as its amount.
+fn prevout_source(source: AmountSource) -> Option<ScriptSource> {
+    match source {
+        AmountSource::Verified => Some(ScriptSource::VerifiedPrevout),
+        AmountSource::Claimed => Some(ScriptSource::ClaimedPrevout),
+        AmountSource::Missing => None,
+    }
 }
 
 /// The output `txin` spends, and how well that is known. A `non_witness_utxo`
@@ -318,6 +360,6 @@ fn script_type(script: &Script) -> &'static str {
     } else if script.is_op_return() {
         "OP_RETURN"
     } else {
-        "non-standard"
+        NON_STANDARD
     }
 }

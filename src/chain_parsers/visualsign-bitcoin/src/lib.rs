@@ -4,6 +4,10 @@
 //! no keys: it cannot tell change from payments. A fee whose input amounts or
 //! sighash commitments cannot be trusted is shown as unknown, alongside the
 //! claimed value. See [`analysis`] for the exact rules.
+//!
+//! Bare (non-standard) scripts are shown as raw hex, on inputs and outputs. A
+//! caller that knows such scripts can name them with a [`ScriptRecognizer`]
+//! through [`BitcoinVisualSignConverter::with_recognizers`].
 
 mod analysis;
 #[cfg(feature = "cli-plugin")]
@@ -14,6 +18,7 @@ mod scripts;
 pub use cli_plugin::{BitcoinArgs, BitcoinPlugin};
 
 pub use analysis::BitcoinParserError;
+pub use scripts::{RecognizedScript, ScriptRecognizer, ScriptSource};
 
 use analysis::{AmountSource, Analysis, Fee, InputInfo, OutputInfo};
 use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
@@ -32,6 +37,10 @@ use visualsign::{AnnotatedPayloadField, SignablePayload};
 /// Upper bound on the encoded input. Real PSBTs with full previous
 /// transactions are well below this.
 const MAX_PSBT_CHARS: usize = 4 * 1024 * 1024;
+
+/// Bounds on what a [`ScriptRecognizer`] may add to one script.
+const MAX_RECOGNIZED_FIELDS: usize = 8;
+const MAX_RECOGNIZED_TEXT: usize = 256;
 
 /// Parse a network name as accepted by `--bitcoin-network`.
 pub fn parse_network(name: &str) -> Result<Network, String> {
@@ -124,6 +133,37 @@ impl BitcoinVisualSignConverter {
     pub fn new(network: Network) -> Self {
         Self { network }
     }
+
+    /// A converter that also asks `recognizers` to name bare scripts.
+    #[must_use]
+    pub fn with_recognizers<'a>(
+        self,
+        recognizers: &'a [&'a dyn ScriptRecognizer],
+    ) -> BitcoinRecognizingConverter<'a> {
+        BitcoinRecognizingConverter {
+            network: self.network,
+            recognizers,
+        }
+    }
+}
+
+/// [`BitcoinVisualSignConverter`] plus caller-supplied [`ScriptRecognizer`]s.
+#[derive(Debug, Clone, Copy)]
+pub struct BitcoinRecognizingConverter<'a> {
+    network: Network,
+    recognizers: &'a [&'a dyn ScriptRecognizer],
+}
+
+fn convert(
+    transaction_wrapper: &BitcoinTransactionWrapper,
+    network: Network,
+    recognizers: &[&dyn ScriptRecognizer],
+    options: VisualSignOptions,
+) -> Result<ConversionResult, VisualSignError> {
+    let analysis = analysis::analyze(transaction_wrapper.inner(), network, recognizers)
+        .map_err(|e| VisualSignError::ConversionError(e.to_string()))?;
+    let payload = build_payload(&analysis, network, options)?;
+    Ok(ConversionResult::new(payload))
 }
 
 impl Default for BitcoinVisualSignConverter {
@@ -138,14 +178,28 @@ impl VisualSignConverter<BitcoinTransactionWrapper> for BitcoinVisualSignConvert
         transaction_wrapper: BitcoinTransactionWrapper,
         options: VisualSignOptions,
     ) -> Result<ConversionResult, VisualSignError> {
-        let analysis = analysis::analyze(transaction_wrapper.inner(), self.network)
-            .map_err(|e| VisualSignError::ConversionError(e.to_string()))?;
-        let payload = build_payload(&analysis, self.network, options)?;
-        Ok(ConversionResult::new(payload))
+        convert(&transaction_wrapper, self.network, &[], options)
     }
 }
 
 impl VisualSignConverterFromString<BitcoinTransactionWrapper> for BitcoinVisualSignConverter {}
+
+impl VisualSignConverter<BitcoinTransactionWrapper> for BitcoinRecognizingConverter<'_> {
+    fn to_visual_sign_payload(
+        &self,
+        transaction_wrapper: BitcoinTransactionWrapper,
+        options: VisualSignOptions,
+    ) -> Result<ConversionResult, VisualSignError> {
+        convert(
+            &transaction_wrapper,
+            self.network,
+            self.recognizers,
+            options,
+        )
+    }
+}
+
+impl VisualSignConverterFromString<BitcoinTransactionWrapper> for BitcoinRecognizingConverter<'_> {}
 
 /// Format satoshis as a fixed 8-decimal BTC string (valid for `create_amount_field`).
 fn btc(amount: Amount) -> String {
@@ -240,10 +294,12 @@ fn input_field(
         "Sequence",
         &format!("0x{sequence:08x} ({rbf}; {relative})"),
     )?);
-    if let Some(addr) = &input.address {
-        expanded.push(create_address_field(
+    match (&input.address, &input.script_hex) {
+        (Some(addr), _) => expanded.push(create_address_field(
             "Address", addr, None, None, None, None,
-        )?);
+        )?),
+        (None, Some(script_hex)) => expanded.push(create_text_field("Script", script_hex)?),
+        (None, None) => {}
     }
     if let Some(script_type) = input.script_type {
         expanded.push(create_text_field("Script Type", script_type)?);
@@ -275,9 +331,10 @@ fn input_field(
     if let Some(warning) = &input.sighash_warning {
         expanded.push(create_text_field("Sighash Type", warning)?);
     }
-    let subtitle = match &input.address {
-        Some(addr) => format!("{amount_text} from {addr}"),
-        None => amount_text,
+    let subtitle = match (&input.address, recognized_name(&input.scripts)) {
+        (Some(addr), _) => format!("{amount_text} from {addr}"),
+        (None, Some(name)) => format!("{amount_text} from {name}"),
+        (None, None) => amount_text,
     };
     Ok(create_preview_layout(
         &format!("Input {index}"),
@@ -300,9 +357,10 @@ fn output_field(
     expanded.push(create_text_field("Script Type", output.script_type)?);
     expanded.push(create_amount_field("Amount", &btc(output.amount), "BTC")?);
     expanded.extend(script_fields(&output.scripts)?);
-    let target = match &output.address {
-        Some(addr) => addr.clone(),
-        None => format!("script {}", output.script_hex),
+    let target = match (&output.address, recognized_name(&output.scripts)) {
+        (Some(addr), _) => addr.clone(),
+        (None, Some(name)) => name.to_string(),
+        (None, None) => format!("script {}", output.script_hex),
     };
     let subtitle = format!("{target} {} BTC", btc(output.amount));
     Ok(create_preview_layout(
@@ -310,6 +368,29 @@ fn output_field(
         subtitle,
         expanded,
     ))
+}
+
+/// The name a recognizer gave a script, if any. Only called after
+/// `script_fields` has checked the text.
+fn recognized_name(details: &[scripts::ScriptDetail]) -> Option<&str> {
+    details.iter().find_map(|d| match d {
+        scripts::ScriptDetail::Custom(r) => Some(r.name.as_str()),
+        _ => None,
+    })
+}
+
+/// Recognizer text is caller code, not PSBT data: hold it to the same display
+/// rules as everything else (non-empty, printable ASCII, bounded).
+fn recognized_text(text: &str) -> Result<&str, VisualSignError> {
+    if text.is_empty()
+        || text.len() > MAX_RECOGNIZED_TEXT
+        || !text.bytes().all(|b| (0x20..=0x7e).contains(&b))
+    {
+        return Err(VisualSignError::ValidationError(
+            "script recognizer text must be 1 to 256 printable ASCII characters".into(),
+        ));
+    }
+    Ok(text)
 }
 
 fn script_fields(
@@ -343,6 +424,23 @@ fn script_fields(
             scripts::ScriptDetail::Unrecognized { script_hex, reason } => {
                 fields.push(create_text_field("Script", script_hex)?);
                 fields.push(create_text_field("Script Status", reason)?);
+            }
+            scripts::ScriptDetail::Custom(recognized) => {
+                if recognized.fields.len() > MAX_RECOGNIZED_FIELDS {
+                    return Err(VisualSignError::ValidationError(
+                        "script recognizer returned more than 8 rows".into(),
+                    ));
+                }
+                fields.push(create_text_field(
+                    "Recognized Script",
+                    recognized_text(&recognized.name)?,
+                )?);
+                for (label, value) in &recognized.fields {
+                    fields.push(create_text_field(
+                        recognized_text(label)?,
+                        recognized_text(value)?,
+                    )?);
+                }
             }
         }
     }
