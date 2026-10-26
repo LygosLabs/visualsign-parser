@@ -1,10 +1,11 @@
 //! The CI gate: every chain in this repo is fully wired, except the gaps
 //! listed in `known-gaps.toml`, and every listed gap is still a gap (so the
-//! list only shrinks).
+//! list only shrinks). A chain with no section of its own inherits only the
+//! repo-wide default-set gaps, the same rule `pr-check` applies to a new crate.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use chain_wiring::pr::parse_known_gaps;
-use chain_wiring::{Names, Rules, check_with};
+use chain_wiring::pr::{allowed_gaps, parse_known_gaps};
+use chain_wiring::{Kind, Names, Rules, check_with};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -33,9 +34,16 @@ fn every_chain_is_wired_except_known_gaps() {
             ));
         }
     }
+    let repo_wide: Vec<&str> = rules
+        .touchpoints
+        .iter()
+        .filter(|t| t.kind == Kind::DefaultSetEquality)
+        .map(|t| t.id.as_str())
+        .collect();
     for chain in &chains {
         let report = check_with(&rules, &root, &Names::new(chain, None).unwrap()).unwrap();
-        let allowed = known.get(chain).cloned().unwrap_or_default();
+        let has_section = known.contains_key(chain);
+        let allowed = allowed_gaps(chain, !has_section, &known, &repo_wide);
         let missing = report.missing_ids();
         for item in report
             .items
@@ -46,7 +54,10 @@ fn every_chain_is_wired_except_known_gaps() {
                 problems.push(format!("{chain}: MISSING {} [{}]", item.text, item.id));
             }
         }
-        for id in allowed.keys().filter(|id| !missing.contains(id.as_str())) {
+        // Inherited gaps belong to another chain's section; only a chain's own
+        // entries can be stale.
+        let own = allowed.keys().filter(|_| has_section);
+        for id in own.filter(|id| !missing.contains(id.as_str())) {
             problems.push(format!(
                 "{chain}: {id} is wired now; delete it from known-gaps.toml"
             ));
