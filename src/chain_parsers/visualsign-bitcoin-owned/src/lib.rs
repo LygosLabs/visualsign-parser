@@ -11,7 +11,8 @@
 //!   through a `non_witness_utxo` that hashes to the prevout txid. A script
 //!   claimed by `witness_utxo` alone is shown exactly as the parser shows it.
 //! - Labels are 1 to 48 characters from letters, digits, space, `-`, `#`, `(`
-//!   and `)`. Anything else refuses the whole call.
+//!   and `)`, and start with `Your ` (so a label cannot pass for an address).
+//!   Anything else refuses the whole call.
 //!
 //! [`Policy::VaultWithdrawal`] refuses the whole display unless every input is
 //! verified through its previous transaction, every input and output script
@@ -37,6 +38,9 @@ pub const MAX_OWNED_SCRIPTS: usize = 16;
 pub const MAX_SCRIPT_BYTES: usize = 10_000;
 /// Longest owned-script JSON.
 pub const MAX_OWNED_JSON_BYTES: usize = 1024 * 1024;
+
+/// Every label starts with this, so none can look like an address.
+const LABEL_PREFIX: &str = "Your ";
 
 /// The row added under every labelled script.
 const MATCH_LABEL: &str = "Recognized By";
@@ -171,6 +175,7 @@ fn is_valid_label(label: &str) -> bool {
         && label
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'-' | b'#' | b'(' | b')'))
+        && label.starts_with(LABEL_PREFIX)
 }
 
 #[derive(Debug)]

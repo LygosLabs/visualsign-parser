@@ -122,7 +122,7 @@
     "network": "regtest",
     "owned": [
       {
-        "label": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+        "label": "Your vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
         "scriptFile": "qsb-vault-0.script"
       }
     ],

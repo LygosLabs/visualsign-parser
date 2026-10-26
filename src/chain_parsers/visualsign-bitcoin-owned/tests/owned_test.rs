@@ -215,7 +215,7 @@ fn owned_non_ascii_label() -> Owned {
 }
 
 fn owned_49_char_label() -> Owned {
-    vec![entry(&vault0(), &"v".repeat(49))]
+    vec![entry(&vault0(), &format!("Your {}", "v".repeat(44)))]
 }
 
 fn owned_control_char_label() -> Owned {
@@ -581,17 +581,19 @@ fn labels_follow_the_allowlist() {
     for good in [
         "Your vault #0",
         "Your new vault #1",
-        "Vault (old) - 2",
-        "a",
-        &"v".repeat(48),
+        "Your vault (old) - 2",
+        "Your a",
+        &format!("Your {}", "v".repeat(43)),
     ] {
         let owned = OwnedScripts::new([(vault0().to_hex_string(), good.to_string())]);
         assert!(owned.is_ok(), "{good:?} refused");
     }
-    let long = "v".repeat(49);
+    let long = format!("Your {}", "v".repeat(44));
     for bad in [
         "",
         long.as_str(),
+        "Vault (old) - 2",
+        "a",
         "caf\u{e9}",
         "tab\there",
         "new\nline",
@@ -644,7 +646,7 @@ fn owned_json_is_strict() {
         ),
         (r#"[{"scriptHex":"","label":"a"}]"#, Refusal::BadScriptHex),
         (
-            r#"[{"scriptHex":"51","label":"a"},{"scriptHex":"51","label":"b"}]"#,
+            r#"[{"scriptHex":"51","label":"Your a"},{"scriptHex":"51","label":"Your b"}]"#,
             Refusal::DuplicateOwnedScript,
         ),
         (r#"[{"scriptHex":"51","label":"a b_c"}]"#, Refusal::BadLabel),
@@ -662,19 +664,19 @@ fn owned_json_is_strict() {
 #[test]
 fn owned_list_is_bounded() {
     let script = |n: usize| format!("{:02x}{}", n, "51".repeat(3));
-    let sixteen: Owned = (0..16).map(|n| (script(n), format!("v{n}"))).collect();
+    let sixteen: Owned = (0..16).map(|n| (script(n), format!("Your v{n}"))).collect();
     assert!(OwnedScripts::new(sixteen.clone()).is_ok());
     let mut seventeen = sixteen;
-    seventeen.push((script(16), "v16".to_string()));
+    seventeen.push((script(16), "Your v16".to_string()));
     assert_eq!(
         OwnedScripts::new(seventeen),
         Err(Refusal::TooManyOwnedScripts)
     );
     let max = "51".repeat(10_000);
-    assert!(OwnedScripts::new([(max, "a".to_string())]).is_ok());
+    assert!(OwnedScripts::new([(max, "Your a".to_string())]).is_ok());
     let over = "51".repeat(10_001);
     assert_eq!(
-        OwnedScripts::new([(over, "a".to_string())]),
+        OwnedScripts::new([(over, "Your a".to_string())]),
         Err(Refusal::BadScriptHex)
     );
 }
@@ -776,5 +778,43 @@ fn bad_psbt_and_parser_refusals_are_codes() {
     assert_eq!(
         run(&psbt_hex(&p), vec![], Policy::None, Network::Regtest),
         "refused: psbt-rejected"
+    );
+}
+
+#[test]
+fn labels_must_start_with_your() {
+    let psbt = psbt_hex(&helper_free_whole_vault());
+    for bad in [
+        "bc1qcyahasx62rxqx50028wkgwzpf9l78zrrg7husa",
+        "tb1qcyahasx62rxqx50028wkgwzpf9l78zrrzcv0tw",
+        "bcrt1qtfqws6mhwa0hcmp8sdkqvp9ece9xs96gh6yx9l",
+        "your vault #0",
+        "YOUR vault #0",
+        "Your",
+        "Yourvault #0",
+        " Your vault #0",
+    ] {
+        let owned = vec![entry(&vault0(), bad)];
+        assert_eq!(
+            OwnedScripts::new(owned.clone()),
+            Err(Refusal::BadLabel),
+            "{bad:?} accepted"
+        );
+        for policy in [Policy::None, Policy::VaultWithdrawal] {
+            assert_eq!(
+                run(&psbt, owned.clone(), policy, Network::Regtest),
+                "refused: bad-label",
+                "{bad:?}"
+            );
+        }
+    }
+    // One good label next to a bad one still refuses the whole call.
+    let mixed = vec![
+        entry(&vault0(), "Your vault #0"),
+        entry(&vault1(), "bc1qcyahasx62rxqx50028wkgwzpf9l78zrrg7husa"),
+    ];
+    assert_eq!(
+        run(&psbt, mixed, Policy::None, Network::Regtest),
+        "refused: bad-label"
     );
 }
