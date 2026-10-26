@@ -12,10 +12,10 @@
 //!   claimed by `witness_utxo` alone is shown exactly as the parser shows it.
 //! - Only bare scripts (no address form) can be owned, so a label never
 //!   replaces or sits beside an address.
-//! - Labels are 1 to 48 characters from letters, digits, space, `-`, `#`, `(`
-//!   and `)`, start with `Your ` followed by something other than spaces, do
-//!   not look like an address or an amount (see [`is_valid_label`]), and are
-//!   unique ignoring ASCII case. Anything else refuses the whole call.
+//! - Labels are the wallet's own words, a closed pattern:
+//!   `^Your (new )?vault #[0-9]{1,4}$`, exactly, with no leading zeros. No two
+//!   owned scripts may carry the same vault number. Anything else refuses the
+//!   whole call.
 //!
 //! [`Policy::VaultWithdrawal`] refuses the whole display unless every input is
 //! verified through its previous transaction, every input and output script
@@ -39,25 +39,12 @@ use visualsign_bitcoin::{
     ScriptSource,
 };
 
-/// Longest label, in characters.
-pub const MAX_LABEL_CHARS: usize = 48;
 /// Most owned scripts per call.
 pub const MAX_OWNED_SCRIPTS: usize = 16;
 /// Longest owned script: the consensus script size limit.
 pub const MAX_SCRIPT_BYTES: usize = 10_000;
 /// Longest owned-script JSON.
 pub const MAX_OWNED_JSON_BYTES: usize = 1024 * 1024;
-
-/// Every label starts with this.
-const LABEL_PREFIX: &str = "Your ";
-
-/// How Bitcoin addresses start: bech32 HRPs and the base58 version characters
-/// of mainnet and testnet (P2PKH 1, m, n; P2SH 3, 2).
-const ADDRESS_PREFIXES: &[&str] = &["bcrt1", "bc1", "tb1", "1", "3", "m", "n", "2"];
-
-/// A word this long that starts like an address and is all letters and digits
-/// reads as an address (or a truncated one) and is refused.
-const ADDRESS_LIKE_MIN_CHARS: usize = 8;
 
 /// The row added under every labelled script.
 const MATCH_LABEL: &str = "Recognized By";
@@ -89,7 +76,7 @@ pub enum Refusal {
     UnsupportedSighash,
     /// An owned script has an address form; only bare scripts are labelled.
     OwnedScriptHasAddress,
-    /// Two owned scripts have the same label (ignoring ASCII case).
+    /// Two owned scripts carry the same vault number.
     DuplicateLabel,
     /// Vault withdrawal: an owned script is an OP_RETURN or a witness program,
     /// which no vault is.
@@ -194,7 +181,10 @@ impl OwnedScripts {
             if out.iter().any(|(s, _)| *s == script) {
                 return Err(Refusal::DuplicateOwnedScript);
             }
-            if out.iter().any(|(_, l)| l.eq_ignore_ascii_case(&label)) {
+            if out
+                .iter()
+                .any(|(_, l)| vault_number(l) == vault_number(&label))
+            {
                 return Err(Refusal::DuplicateLabel);
             }
             out.push((script, label));
@@ -221,44 +211,22 @@ fn has_address_form(script: &Script) -> bool {
     Address::from_script(script, Network::Bitcoin).is_ok()
 }
 
-/// A label is valid when it is 1 to [`MAX_LABEL_CHARS`] characters from the
-/// allowlist, starts with [`LABEL_PREFIX`] followed by something other than
-/// spaces, and after the prefix neither looks like an address nor like an
-/// amount.
+/// The vault number of a label of the form `Your (new )?vault #<n>`, where
+/// `<n>` is 1 to 4 ASCII digits with no leading zero (`0` itself is fine).
+/// `None` for anything else.
+fn vault_number(label: &str) -> Option<u16> {
+    let rest = label.strip_prefix("Your ")?;
+    let rest = rest.strip_prefix("new ").unwrap_or(rest);
+    let digits = rest.strip_prefix("vault #")?;
+    let canonical = (1..=4).contains(&digits.len())
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'));
+    if canonical { digits.parse().ok() } else { None }
+}
+
+/// The closed label pattern `^Your (new )?vault #[0-9]{1,4}$`.
 fn is_valid_label(label: &str) -> bool {
-    (1..=MAX_LABEL_CHARS).contains(&label.len())
-        && label
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'-' | b'#' | b'(' | b')'))
-        && label.strip_prefix(LABEL_PREFIX).is_some_and(|rest| {
-            !rest.trim().is_empty() && !looks_like_address(rest) && !looks_like_amount(rest)
-        })
-}
-
-/// Some word starts with an address prefix (any ASCII case) and is at least
-/// [`ADDRESS_LIKE_MIN_CHARS`] letters and digits.
-fn looks_like_address(text: &str) -> bool {
-    text.split(' ').any(|word| {
-        let lower = word.to_ascii_lowercase();
-        word.len() >= ADDRESS_LIKE_MIN_CHARS
-            && word.bytes().all(|b| b.is_ascii_alphanumeric())
-            && ADDRESS_PREFIXES.iter().any(|p| lower.starts_with(p))
-    })
-}
-
-/// A run of digits followed (after optional spaces) by `btc` or `sat`, in any
-/// ASCII case.
-fn looks_like_amount(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    let bytes = lower.as_bytes();
-    (0..bytes.len()).any(|i| {
-        let ends_digits =
-            bytes[i].is_ascii_digit() && bytes.get(i + 1).is_none_or(|b| !b.is_ascii_digit());
-        ends_digits && {
-            let after = lower[i + 1..].trim_start_matches(' ');
-            after.starts_with("btc") || after.starts_with("sat")
-        }
-    })
+    vault_number(label).is_some()
 }
 
 #[derive(Debug)]

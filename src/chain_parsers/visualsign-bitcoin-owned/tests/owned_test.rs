@@ -628,13 +628,15 @@ fn an_output_with_an_address_is_never_labelled_and_unowned_ones_are_refused() {
 }
 
 #[test]
-fn labels_follow_the_allowlist() {
+fn labels_follow_the_closed_pattern() {
+    // ^Your (new )?vault #[0-9]{1,4}$, no leading zeros.
     for good in [
         "Your vault #0",
+        "Your vault #7",
+        "Your vault #12",
+        "Your vault #9999",
         "Your new vault #1",
-        "Your vault (old) - 2",
-        "Your a",
-        &format!("Your {}", "v".repeat(43)),
+        "Your new vault #9999",
     ] {
         let owned = OwnedScripts::new([(vault0().to_hex_string(), good.to_string())]);
         assert!(owned.is_ok(), "{good:?} refused");
@@ -650,34 +652,37 @@ fn labels_follow_the_allowlist() {
         "new\nline",
         "nul\0",
         "a_b",
-        "a.b",
-        "a/b",
-        "a:b",
-        "a\"b",
-        "a'b",
-        "a<b",
-        "a\\b",
-        "a,b",
-        "\u{7f}",
-        // The character rule on its own: every case carries the prefix.
         "Your a_b",
         "Your a.b",
-        "Your a/b",
-        "Your a:b",
-        "Your a\"b",
-        "Your a'b",
-        "Your a<b",
-        "Your a\\b",
-        "Your a,b",
         "Your caf\u{e9}",
-        "Your tab\there",
-        "Your new\nline",
-        "Your nul\0",
         "Your \u{7f}",
-        "Your 0.5",
-        "Your +1",
         "Your ",
-        "Your    ",
+        // Near the pattern but not it.
+        "Your vault #",
+        "Your vault #01",
+        "Your vault #10000",
+        "Your vault #-1",
+        "Your vault #1a",
+        "Your vault #O",
+        "Your vault #0 ",
+        " Your vault #0",
+        "Your vault  #0",
+        "Your  vault #0",
+        "Your vault#0",
+        "Your Vault #0",
+        "your vault #0",
+        "YOUR VAULT #0",
+        "Your new  vault #1",
+        "Your old vault #1",
+        "Your new new vault #1",
+        "Your vault #1\n",
+        "Your vault #\u{0661}",
+        // Words the old rules allowed.
+        "Your change",
+        "Your vault (old) - 2",
+        "Your a",
+        "Your 2nd vault",
+        "Your mine",
     ] {
         let owned = OwnedScripts::new([(vault0().to_hex_string(), bad.to_string())]);
         assert_eq!(owned, Err(Refusal::BadLabel), "{bad:?} accepted");
@@ -705,30 +710,31 @@ fn labels_cannot_look_like_an_address_or_an_amount() {
         "Your 100 sats",
         "Your vault 1 BTC",
         "Your vault #1 sat",
+        // Re-audit R2-2: punctuation around an address or an amount.
+        "Your -bc1qcyahasx62rxqx50028wkgwzpf9l78zrrg7husa",
+        "Your #bc1qcyahasx62rxqx50028wkgwzpf9l78zrrg7husa",
+        "Your (3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy)",
+        "Your bc1qcyah-asx62rxqx50028wkgwzpf9l78zrrg7husa",
+        "Your bc1qcya hasx62rxqx50028wkgwzpf9l78zrrg7husa",
+        "Your 1 bitcoin",
+        "Your 1(BTC)",
+        "Your 1-BTC",
+        "Your one BTC",
+        "Your 1 B T C",
     ] {
         let owned = OwnedScripts::new([(vault0().to_hex_string(), bad.to_string())]);
         assert_eq!(owned, Err(Refusal::BadLabel), "{bad:?} accepted");
-    }
-    for good in [
-        "Your vault #0",
-        "Your new vault #1",
-        "Your change",
-        "Your vault (old) - 2",
-        "Your 2nd vault",
-        "Your mine",
-        "Your vault #12",
-    ] {
-        let owned = OwnedScripts::new([(vault0().to_hex_string(), good.to_string())]);
-        assert!(owned.is_ok(), "{good:?} refused");
     }
 }
 
 #[test]
 fn two_owned_scripts_cannot_share_a_label() {
+    // Same vault number, with or without "new": the spent vault and the
+    // change could not be told apart.
     for (a, b) in [
         ("Your vault #0", "Your vault #0"),
-        ("Your vault #0", "Your Vault #0"),
-        ("Your vault #0", "Your VAULT #0"),
+        ("Your vault #1", "Your new vault #1"),
+        ("Your new vault #7", "Your vault #7"),
     ] {
         let owned = vec![entry(&vault0(), a), entry(&vault1(), b)];
         assert_eq!(
@@ -745,6 +751,11 @@ fn two_owned_scripts_cannot_share_a_label() {
             ),
             "refused: duplicate-label"
         );
+    }
+    // Re-audit R2-2: look-alikes of the same label are not labels at all.
+    for b in ["Your vault #0 ", "Your vault  #0", "Your vault #O"] {
+        let owned = vec![entry(&vault0(), "Your vault #0"), entry(&vault1(), b)];
+        assert_eq!(OwnedScripts::new(owned), Err(Refusal::BadLabel), "{b:?}");
     }
 }
 
@@ -780,7 +791,7 @@ fn owned_json_is_strict() {
         ),
         (r#"[{"scriptHex":"","label":"a"}]"#, Refusal::BadScriptHex),
         (
-            r#"[{"scriptHex":"51","label":"Your a"},{"scriptHex":"51","label":"Your b"}]"#,
+            r#"[{"scriptHex":"51","label":"Your vault #1"},{"scriptHex":"51","label":"Your vault #2"}]"#,
             Refusal::DuplicateOwnedScript,
         ),
         (r#"[{"scriptHex":"51","label":"a b_c"}]"#, Refusal::BadLabel),
@@ -798,19 +809,21 @@ fn owned_json_is_strict() {
 #[test]
 fn owned_list_is_bounded() {
     let script = |n: usize| format!("{:02x}{}", n, "51".repeat(3));
-    let sixteen: Owned = (0..16).map(|n| (script(n), format!("Your v{n}"))).collect();
+    let sixteen: Owned = (0..16)
+        .map(|n| (script(n), format!("Your vault #{n}")))
+        .collect();
     assert!(OwnedScripts::new(sixteen.clone()).is_ok());
     let mut seventeen = sixteen;
-    seventeen.push((script(16), "Your v16".to_string()));
+    seventeen.push((script(16), "Your vault #16".to_string()));
     assert_eq!(
         OwnedScripts::new(seventeen),
         Err(Refusal::TooManyOwnedScripts)
     );
     let max = "51".repeat(10_000);
-    assert!(OwnedScripts::new([(max, "Your a".to_string())]).is_ok());
+    assert!(OwnedScripts::new([(max, "Your vault #1".to_string())]).is_ok());
     let over = "51".repeat(10_001);
     assert_eq!(
-        OwnedScripts::new([(over, "Your a".to_string())]),
+        OwnedScripts::new([(over, "Your vault #1".to_string())]),
         Err(Refusal::BadScriptHex)
     );
 }
@@ -1046,7 +1059,10 @@ fn vault_withdrawal_refuses_an_owned_op_return() {
     let mut p = helper_free_whole_vault();
     p.unsigned_tx.output.push(txout(memo.clone(), 0));
     p.outputs.push(Default::default());
-    let owned = vec![entry(&vault0(), "Your vault #0"), entry(&memo, "Your memo")];
+    let owned = vec![
+        entry(&vault0(), "Your vault #0"),
+        entry(&memo, "Your vault #5"),
+    ];
     let psbt = psbt_hex(&p);
     assert_eq!(
         run(
@@ -1058,7 +1074,34 @@ fn vault_withdrawal_refuses_an_owned_op_return() {
         "refused: owned-script-not-vault"
     );
     // Under none it is a bare script like any other.
-    assert!(run(&psbt, owned, Policy::None, Network::Regtest).contains("Your memo"));
+    assert!(run(&psbt, owned, Policy::None, Network::Regtest).contains("Your vault #5"));
+}
+
+#[test]
+fn vault_withdrawal_refuses_an_owned_witness_program() {
+    // A version 0 program of length 5 has no address form (only 20 and 32
+    // are valid), so it can be owned, but it is no vault.
+    let program = ScriptBuf::from_bytes(vec![0x00, 0x05, 1, 1, 1, 1, 1]);
+    assert!(program.is_witness_program());
+    let mut p = helper_free_whole_vault();
+    p.unsigned_tx.output[0].value = Amount::from_sat(80_000);
+    p.unsigned_tx.output.push(txout(program.clone(), 5_000));
+    p.outputs.push(Default::default());
+    let owned = vec![
+        entry(&vault0(), "Your vault #0"),
+        entry(&program, "Your new vault #1"),
+    ];
+    let psbt = psbt_hex(&p);
+    assert_eq!(
+        run(
+            &psbt,
+            owned.clone(),
+            Policy::VaultWithdrawal,
+            Network::Regtest
+        ),
+        "refused: owned-script-not-vault"
+    );
+    assert!(run(&psbt, owned, Policy::None, Network::Regtest).contains("Your new vault #1"));
 }
 
 #[test]
