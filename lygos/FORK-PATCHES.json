@@ -266,6 +266,16 @@
         "lygos/display-core/scripts/check-reproducible.sh"
       ],
       "reason": "Ours: pin the upstream base in the check and make the manifest append-only; build-wasm exits 1 on a hash mismatch and checks clang's libraries; a shared build dir; an exact allowlist of linked crates; BUILD.md platform and no-root route."
+    },
+    {
+      "commit": "095a6ef163891badf1dadec1c8fcd32cff173f4e",
+      "subject": "fix(display-core): the build directory exists only during a build",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/display-core/BUILD.md",
+        "lygos/display-core/scripts/build-root.sh"
+      ],
+      "reason": "Ours: the fixed build directory is created per build by the building user (mode 700) and removed afterwards; other users wait their turn, so no administrator or world-writable directory is needed."
     }
   ]
 }
