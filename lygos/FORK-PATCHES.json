@@ -1,0 +1,236 @@
+{
+  "version": 1,
+  "upstream": {
+    "repository": "https://github.com/anchorageoss/visualsign-parser",
+    "baseCommit": "5d18e229d65d4015865ea71dbe22b85578bc4c74",
+    "baseSubject": "feat(bitcoin): add PSBT parser crate (#577)"
+  },
+  "notes": "One entry per commit on top of the upstream base, in order. Commits that change only this file are not listed. lygos/check-fork-patches.mjs (run by lygos/check-all.sh) checks it against git log.",
+  "patches": [
+    {
+      "commit": "3f4159d93fe71f1151f68fcaf12276f0a3cfad3e",
+      "subject": "feat(bitcoin): show bare input scripts and let callers name bare scripts",
+      "upstreamCandidate": true,
+      "files": [
+        "docs/chains/bitcoin.mdx",
+        "src/chain_parsers/visualsign-bitcoin/src/analysis.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/scripts.rs",
+        "src/chain_parsers/visualsign-bitcoin/tests/fixtures/synthetic-bare-script-input.expected",
+        "src/chain_parsers/visualsign-bitcoin/tests/fixtures/synthetic-bare-script-input.input",
+        "src/chain_parsers/visualsign-bitcoin/tests/lib_test.rs"
+      ],
+      "reason": "Upstream candidate: show the spent script hex for inputs with no address form (as outputs already do), and add a hook for callers to name bare scripts, told whether a spent script is verified or only claimed."
+    },
+    {
+      "commit": "ef8226da4db9b85822a7fdebf8cfeb2c0320b737",
+      "subject": "feat(bitcoin-owned): label owned bare scripts by exact bytes",
+      "upstreamCandidate": false,
+      "files": [
+        "src/Cargo.lock",
+        "src/Cargo.toml",
+        "src/chain_parsers/visualsign-bitcoin-owned/Cargo.toml",
+        "src/chain_parsers/visualsign-bitcoin-owned/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-funding-3a002c9d.tx",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-real-helper-whole-vault-none.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-real-helper-whole-vault-none.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-real-helper-whole-vault.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-real-helper-whole-vault.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-spend-c81f5a5c.tx",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-bad-label-49-chars.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-bad-label-49-chars.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-bad-label-control-char.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-bad-label-control-char.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-bad-label-non-ascii.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-bad-label-non-ascii.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-claimed-vault-input-none.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-claimed-vault-input-none.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-claimed-vault-input-vault-withdrawal.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-claimed-vault-input-vault-withdrawal.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-helper-free-whole-vault-testnet4.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-helper-free-whole-vault-testnet4.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-helper-free-whole-vault.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-helper-free-whole-vault.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-output-pays-spent-vault.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-output-pays-spent-vault.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-partial-with-change.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-partial-with-change.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-unlabelled-bare-output-none.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-unlabelled-bare-output-none.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-unlabelled-bare-output-vault-withdrawal.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-unlabelled-bare-output-vault-withdrawal.input",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-vault-1.script",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-vault-0.script",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/shapes.json",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/owned_test.rs"
+      ],
+      "reason": "Ours: label a bare script only when its bytes equal a script the wallet supplied, and a vault-withdrawal policy that refuses unverified inputs and unlabelled bare scripts."
+    },
+    {
+      "commit": "413328f1a24bc3281a9d5a915b1bb160b331181c",
+      "subject": "feat(display-core): one WebAssembly export for the Bitcoin display",
+      "upstreamCandidate": false,
+      "files": [
+        "src/Cargo.lock",
+        "src/Cargo.toml",
+        "src/display-core/Cargo.toml",
+        "src/display-core/scripts/build-wasm.sh",
+        "src/display-core/scripts/run-goldens.mjs",
+        "src/display-core/src/lib.rs",
+        "src/display-core/tests/display_test.rs"
+      ],
+      "reason": "Ours: display-core, the single WebAssembly export display(psbt, network, owned, policy) returning the payload and its digest or a refusal code, never throwing."
+    },
+    {
+      "commit": "3da121596cc9a029a5ac90030abb4d7f8fd1f85c",
+      "subject": "fix(bitcoin-owned): labels must start with \"Your \"",
+      "upstreamCandidate": false,
+      "files": [
+        "src/chain_parsers/visualsign-bitcoin-owned/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/shapes.json",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/owned_test.rs"
+      ],
+      "reason": "Ours: owned labels must start with 'Your ' (superseded by the closed pattern in fc9a47f)."
+    },
+    {
+      "commit": "895a81aa08bee39fa8cae40f68079ccd56e5ad7b",
+      "subject": "fix(display-core): move out of the upstream workspace",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/display-core/Cargo.lock",
+        "lygos/display-core/Cargo.toml",
+        "lygos/display-core/rust-toolchain.toml",
+        "lygos/display-core/scripts/build-wasm.sh",
+        "lygos/display-core/scripts/check-upstream-isolation.sh",
+        "lygos/display-core/scripts/run-goldens.mjs",
+        "lygos/display-core/src/lib.rs",
+        "lygos/display-core/tests/display_test.rs",
+        "src/Cargo.lock",
+        "src/Cargo.toml",
+        "src/display-core/Cargo.toml"
+      ],
+      "reason": "Ours: move display-core into its own workspace so secp256k1 lowmemory never reaches upstream crates or make -C src build."
+    },
+    {
+      "commit": "abccbf766c2ccd96525c70daf1d62579391c50e7",
+      "subject": "fix(display-core): put the engine identity in the digest",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/display-core/scripts/run-goldens.mjs",
+        "lygos/display-core/src/lib.rs",
+        "lygos/display-core/tests/display_test.rs"
+      ],
+      "reason": "Ours: the digest covers a compiled-in engine identity: sha256(engine || newline || payload)."
+    },
+    {
+      "commit": "459bf6b269dfb16f02263f71b6f3eb0291edb249",
+      "subject": "refactor(bitcoin): own Send + Sync recognizers on the converter",
+      "upstreamCandidate": true,
+      "files": [
+        "docs/chains/bitcoin.mdx",
+        "src/chain_parsers/visualsign-bitcoin/src/analysis.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/scripts.rs",
+        "src/chain_parsers/visualsign-bitcoin/tests/lib_test.rs"
+      ],
+      "reason": "Upstream candidate: rework the hook to the repo's style (Send + Sync recognizers owned by the converter, registrable), check recognizer output where it enters, one rule for bare scripts, reserved parser labels."
+    },
+    {
+      "commit": "8b4d909a8de704239e4d917a875d4a8e8932ed44",
+      "subject": "test(bitcoin): a REGEN_FIXTURES run can never pass as a check",
+      "upstreamCandidate": true,
+      "files": [
+        "src/chain_parsers/visualsign-bitcoin/tests/lib_test.rs"
+      ],
+      "reason": "Upstream candidate: a test run with REGEN_FIXTURES set rewrites goldens and then fails, so it can never pass as a check."
+    },
+    {
+      "commit": "472940ada37ade070ddd130da27d491ba70b2733",
+      "subject": "fix(bitcoin-owned): bare owned scripts, stricter labels, owned hook",
+      "upstreamCandidate": false,
+      "files": [
+        "src/chain_parsers/visualsign-bitcoin-owned/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/owned_test.rs"
+      ],
+      "reason": "Ours: adapt to the reworked hook; only bare scripts can be owned; no shared labels; label rules (superseded by fc9a47f); REGEN check in our tests."
+    },
+    {
+      "commit": "c97da763b571534459d408b5c1b723f773e6adba",
+      "subject": "fix(bitcoin-owned): vault withdrawal renders only signed or verified data",
+      "upstreamCandidate": false,
+      "files": [
+        "src/chain_parsers/visualsign-bitcoin-owned/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/owned_test.rs"
+      ],
+      "reason": "Ours: under vault-withdrawal refuse unsigned PSBT fields, an owned OP_RETURN or witness program, and duplicate inputs, so only signed or verified data is rendered."
+    },
+    {
+      "commit": "9bfa89fa54eafa9840ec70acc5a3020c4a46b687",
+      "subject": "fix(display-core): same wasm bytes from any checkout path",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/display-core/scripts/build-wasm.sh",
+        "lygos/display-core/scripts/check-reproducible.sh"
+      ],
+      "reason": "Ours: build the wasm through one fixed source path so its bytes do not depend on the checkout folder; check-reproducible.sh proves it."
+    },
+    {
+      "commit": "8a91389cc182bd2a6c82fd1738733ebb60d5deaa",
+      "subject": "chore(lygos): checks that fail loudly, and the wallet's rules",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/check-all.sh",
+        "lygos/display-core/WALLET-RULES.md",
+        "lygos/display-core/scripts/run-goldens.mjs"
+      ],
+      "reason": "Ours: run-goldens pins goldens and counts; lygos/check-all.sh runs every check; WALLET-RULES.md records the wallet's rules."
+    },
+    {
+      "commit": "9086b12a8a2205e4622ab8495d6b2f2bc49d5152",
+      "subject": "fix(bitcoin): recognizer rows cannot pass for parser rows",
+      "upstreamCandidate": true,
+      "files": [
+        "docs/chains/bitcoin.mdx",
+        "src/chain_parsers/visualsign-bitcoin/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/scripts.rs",
+        "src/chain_parsers/visualsign-bitcoin/tests/lib_test.rs"
+      ],
+      "reason": "Upstream candidate: recognizer row labels are compared on letters and digits only, so near-copies of parser labels are refused; label tests cover runtime-built labels and pin the label sites."
+    },
+    {
+      "commit": "fc9a47f6696bbfe8abd629e4eec3bbc9d22b3514",
+      "subject": "fix(bitcoin-owned): labels are a closed pattern; test the witness-program refusal",
+      "upstreamCandidate": false,
+      "files": [
+        "src/chain_parsers/visualsign-bitcoin-owned/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/owned_test.rs"
+      ],
+      "reason": "Ours: owned labels are the closed pattern ^Your (new )?vault #[0-9]{1,4}$ with distinct vault numbers; test the witness-program half of owned-script-not-vault."
+    },
+    {
+      "commit": "6055641c42de208293a79ccba5ad17e332faef8f",
+      "subject": "fix(display-core): pin the wasm hash and the tools that build it",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/display-core/BUILD.md",
+        "lygos/display-core/WASM-SHA256",
+        "lygos/display-core/scripts/build-wasm.sh",
+        "lygos/display-core/scripts/check-reproducible.sh"
+      ],
+      "reason": "Ours: pin the wasm sha256 in WASM-SHA256, require exact tool versions, build in a cleared environment, refuse cargo config files and an unsafe build directory; BUILD.md for verifiers."
+    },
+    {
+      "commit": "745846b2f6cb0285efe7084d57ca52a1c4f2d51a",
+      "subject": "chore(lygos): check-all pins tests, the wasm hash, patches and linked chains",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/check-all.sh",
+        "lygos/check-fork-patches.mjs",
+        "lygos/display-core/WALLET-RULES.md",
+        "lygos/display-core/scripts/check-chain-deps.sh",
+        "lygos/display-core/scripts/check-reproducible.sh"
+      ],
+      "reason": "Ours: check-all pins test counts and fails on ignored tests, compares the wasm to WASM-SHA256, runs the reproducibility, patch-manifest and linked-chains checks."
+    }
+  ]
+}
