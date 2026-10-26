@@ -50,3 +50,5 @@ if [ "${hashes[0]}" != "$pinned" ]; then
   exit 1
 fi
 echo "OK: $count builds of $commit from different paths, one sha256 ${hashes[0]}, equal to WASM-SHA256"
+# Remove only what this script created (the work dir was empty at the start).
+rm -rf "$work"/path-* "$work"/target-* "$work"/out-*
