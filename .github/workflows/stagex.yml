@@ -36,7 +36,7 @@ jobs:
       # this, `docker push --all-tags` runs against an empty tag list and
       # silently publishes nothing.
       tags: >-
-        ${{ github.ref == format('refs/heads/{0}', 'main') && 'latest' || '' }}
+        ${{ github.ref == 'refs/heads/main' && 'latest' || '' }}
         ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || '' }}
         ${{ github.event_name == 'push' && github.ref_name || '' }}
         ${{ github.event_name == 'workflow_dispatch' && github.ref_name || '' }}
@@ -60,7 +60,11 @@ jobs:
           # merge-bases for non-tag builds (latest, pr-*).
           fetch-depth: 0
       - name: Docker setup
-        uses: ./.github/actions/docker-setup
+        # Workspace-relative path on purpose: GitHub's newer `$/...`
+        # self-repository syntax isn't understood by actionlint yet. The
+        # only step before this is the checkout, so `./` resolves to the
+        # same commit's action.
+        uses: ./.github/actions/docker-setup # zizmor: ignore[self-repository] see comment above
         with:
           dockerHub: ${{ secrets.DOCKERHUB_API_KEY }}
 
