@@ -6,9 +6,10 @@ name: zizmor
 # https://docs.zizmor.sh
 #
 # Plain `pull_request` (never `pull_request_target`): the job only reads the
-# checked-out YAML. Findings go to code scanning (SARIF) only for runs in our
+# checked-out YAML. Every run gets GitHub annotations, and any finding fails
+# the job. Findings also go to code scanning (SARIF), but only for runs in our
 # own repo that aren't fork PRs: fork PRs get a read-only token, so they can't
-# upload SARIF. Everything else gets GitHub annotations instead.
+# upload SARIF.
 
 on:
   pull_request:
@@ -44,10 +45,24 @@ jobs:
       # Installs zizmor from a hash-pinned wheel lockfile inside the action's
       # own tree, so the zizmor bytes are fixed by this SHA. Online audits stay
       # on (the default), as before, and use the job token.
-      - name: Run zizmor
+      #
+      # Two passes, because zizmor never fails on findings with
+      # `--format=sarif`. The annotations pass always runs and is the one that
+      # fails the job (and so the required status). The SARIF pass only feeds
+      # code scanning, and runs even when the gate fails.
+      - name: Run zizmor (gate)
+        id: gate
         uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
         with:
           version: 1.30.1
           inputs: .github
-          advanced-security: ${{ env.UPLOAD_SARIF == 'true' }}
-          annotations: ${{ env.UPLOAD_SARIF != 'true' }}
+          advanced-security: false
+          annotations: true
+
+      - name: Run zizmor (SARIF to code scanning)
+        if: ${{ always() && env.UPLOAD_SARIF == 'true' }}
+        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        with:
+          version: 1.30.1
+          inputs: .github
+          advanced-security: true
