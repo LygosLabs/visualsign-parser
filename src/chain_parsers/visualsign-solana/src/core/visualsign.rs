@@ -21,6 +21,7 @@ use solana_sdk::{
 };
 use std::collections::BTreeMap;
 use std::str::FromStr;
+use visualsign::encodings::escape_display_text;
 use visualsign::field_builders::create_text_field;
 use visualsign::signing::SignerAllowlist;
 use visualsign::{
@@ -188,46 +189,6 @@ impl<'de> serde::Deserialize<'de> for OffChainMessage {
 
         deserializer.deserialize_map(EnvelopeVisitor)
     }
-}
-
-/// Escape what cannot render, rather than dropping it or collapsing it.
-///
-/// `core::arg_rendering`'s `charset_safe` filters unrenderable characters out,
-/// which is safe for an argument preview but not for text a signer approves:
-/// dropping lets two different messages render identically. Replacing them with
-/// a single marker character fails the same way less obviously, because the
-/// marker is itself renderable: a literal `?` collides with anything replaced
-/// by `?`.
-///
-/// Escaping is reversible, so distinct messages stay distinct. The escape is
-/// percent-encoding of the character's UTF-8 bytes (`%0A` for a line feed), and
-/// a literal `%` is escaped too (`%25`), or a message carrying one could forge an
-/// escape for a character it does not contain.
-///
-/// The escape uses no backslash. `SignablePayload::validate_charset` refuses a
-/// payload whose JSON contains `\u`, `\t`, `\r`, `\b`, `\f` or `\/`, and a
-/// backslash in field text serializes as `\\`, so a backslash escape (or a
-/// literal backslash followed by one of those letters) would get the whole
-/// message refused. A literal backslash is therefore percent-encoded as well.
-fn charset_escaped(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut utf8 = [0u8; 4];
-    for c in text.chars() {
-        match c {
-            '%' | '\\' => {
-                let byte = c as u32;
-                out.push_str(&format!("%{byte:02X}"));
-            }
-            ' ' => out.push(' '),
-            c if c.is_ascii_graphic() => out.push(c),
-            c => {
-                for b in c.encode_utf8(&mut utf8).bytes() {
-                    out.push_str(&format!("%{b:02X}"));
-                }
-            }
-        }
-    }
-    out
 }
 
 impl Transaction for SolanaTransactionWrapper {
@@ -948,7 +909,7 @@ fn message_to_visual_sign_payload(
         "Solana Message".to_string(),
         None,
         vec![
-            create_text_field("Message", &charset_escaped(&envelope.message))?
+            create_text_field("Message", &escape_display_text(&envelope.message))?
                 .signable_payload_field,
             // Not escaped: decoding already refused anything that is not a base58
             // Solana address, and base58 has no character that needs escaping.
