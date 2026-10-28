@@ -16,12 +16,11 @@ use crate::idl::signature::{
     authorized_idl_signers, convert_proto_signature, validate_idl_signature,
 };
 use base64::{self, Engine};
+use solana_message::VersionedMessage;
 use solana_packet::PACKET_DATA_SIZE;
-use solana_sdk::{
-    message::VersionedMessage,
-    pubkey::Pubkey,
-    transaction::{Transaction as SolanaTransaction, VersionedTransaction},
-};
+use solana_pubkey::Pubkey;
+use solana_transaction::Transaction as SolanaTransaction;
+use solana_transaction::versioned::VersionedTransaction;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use visualsign::signing::SignerAllowlist;
@@ -150,6 +149,13 @@ impl Transaction for SolanaTransactionWrapper {
 
         // First try to decode as a VersionedTransaction.
         let versioned_err = match bincode::deserialize::<VersionedTransaction>(&bytes) {
+            // solana-message 6 decodes SIMD-0385 v1 messages; the visualizer
+            // does not support them, so keep rejecting them here.
+            Ok(versioned_tx) if matches!(versioned_tx.message, VersionedMessage::V1(_)) => {
+                return Err(TransactionParseError::UnsupportedVersion(
+                    "Solana message format v1 (SIMD-0385) is not supported".to_string(),
+                ));
+            }
             Ok(versioned_tx) => return Ok(Self::Versioned(versioned_tx)),
             Err(e) => e,
         };
@@ -199,6 +205,7 @@ impl Transaction for SolanaTransactionWrapper {
             Self::Versioned(tx) => match &tx.message {
                 VersionedMessage::Legacy(_) => "Solana (Legacy)".to_string(),
                 VersionedMessage::V0(_) => "Solana (V0)".to_string(),
+                VersionedMessage::V1(_) => "Solana (V1)".to_string(),
             },
         }
     }
@@ -491,18 +498,24 @@ impl VisualSignConverter<SolanaTransactionWrapper> for SolanaVisualSignConverter
         // a third full message serialize on the hot path (`decode_transfers`
         // already serializes the message once). `transaction_wrapper` is still
         // owned here because the match above borrowed it.
-        let message_hex = match &transaction_wrapper {
+        let message_bytes = match &transaction_wrapper {
             SolanaTransactionWrapper::Legacy(transaction) => {
-                hex::encode(transaction.message.serialize())
+                bincode::serialize(&transaction.message)
             }
             SolanaTransactionWrapper::Versioned(versioned_tx) => {
-                hex::encode(versioned_tx.message.serialize())
+                bincode::serialize(&versioned_tx.message)
             }
-        };
+        }
+        .map_err(|e| {
+            VisualSignError::ParseError(TransactionParseError::DecodeError(format!(
+                "Failed to serialize message: {e}"
+            )))
+        })?;
+        let message_hex = hex::encode(message_bytes);
 
         let idl_registry = create_idl_registry_from_options(&options)?;
         let raw_simulated_instructions =
-            extract_raw_simulated_instructions(&options, &idl_registry);
+            extract_raw_simulated_instructions(&options, &idl_registry)?;
         Ok(
             match build_intermediate_bytes(
                 &message_hex,
@@ -554,10 +567,7 @@ impl VisualSignConverter<SolanaTransactionWrapper> for SolanaVisualSignConverter
 fn build_intermediate_bytes(
     message_hex: &str,
     idl_registry: &crate::idl::IdlRegistry,
-    raw_simulated_instructions: Option<(
-        Vec<crate::intermediate::SolanaSimulatedInstruction>,
-        Option<crate::intermediate::SolanaSimulationError>,
-    )>,
+    raw_simulated_instructions: Option<SimulationDecode>,
     max_fee_lamports: u64,
 ) -> Option<Vec<u8>> {
     match extract_solana_intermediate_output(message_hex, false, idl_registry, max_fee_lamports) {
@@ -611,37 +621,65 @@ fn fee_cap_lamports(options: &VisualSignOptions) -> u64 {
         .unwrap_or(DEFAULT_MAX_FEE_LAMPORTS)
 }
 
+/// A supplied simulation's inner instructions, and why it could not be read.
+type SimulationDecode = (
+    Vec<crate::intermediate::SolanaSimulatedInstruction>,
+    Option<crate::intermediate::SolanaSimulationError>,
+);
+
 /// Pulls `simulated_transaction_result` out of `options.metadata`'s Solana
 /// branch, if present, and IDL-decodes it.
 ///
-/// `None` only when no simulation was supplied. Once the field is present a
+/// `Ok(None)` only when no simulation was supplied. Once the field is present a
 /// failure to read it comes back as a `SolanaSimulationError`, not an absence.
+///
+/// A build without the `simulation` feature cannot read the field, so it
+/// refuses the request rather than emit intermediate output without it.
 fn extract_raw_simulated_instructions(
     options: &VisualSignOptions,
     idl_registry: &crate::idl::IdlRegistry,
-) -> Option<(
-    Vec<crate::intermediate::SolanaSimulatedInstruction>,
-    Option<crate::intermediate::SolanaSimulationError>,
-)> {
-    let raw_json_b64 = solana_metadata(options)?
-        .simulated_transaction_result
-        .as_ref()?;
-    let raw_json = match base64::engine::general_purpose::STANDARD.decode(raw_json_b64) {
-        Ok(raw_json) => raw_json,
-        Err(e) => {
-            tracing::warn!(error = %e, "simulated_transaction_result is not valid base64");
-            return Some((
-                Vec::new(),
-                Some(crate::intermediate::SolanaSimulationError::InvalidBase64),
-            ));
-        }
+) -> Result<Option<SimulationDecode>, VisualSignError> {
+    let Some(raw_json_b64) =
+        solana_metadata(options).and_then(|solana| solana.simulated_transaction_result.as_ref())
+    else {
+        return Ok(None);
     };
-    Some(crate::intermediate::parse_and_decode_simulated_instructions(&raw_json, idl_registry))
+    #[cfg(not(feature = "simulation"))]
+    {
+        // Unread without the feature.
+        let _ = (raw_json_b64, idl_registry);
+        Err(VisualSignError::ParseError(
+            TransactionParseError::InvalidFormat(
+                "simulated_transaction_result supplied, but this parser was built without \
+                 the `simulation` feature"
+                    .to_string(),
+            ),
+        ))
+    }
+    #[cfg(feature = "simulation")]
+    {
+        let raw_json = match base64::engine::general_purpose::STANDARD.decode(raw_json_b64) {
+            Ok(raw_json) => raw_json,
+            Err(e) => {
+                tracing::warn!(error = %e, "simulated_transaction_result is not valid base64");
+                return Ok(Some((
+                    Vec::new(),
+                    Some(crate::intermediate::SolanaSimulationError::InvalidBase64),
+                )));
+            }
+        };
+        Ok(Some(
+            crate::intermediate::parse_and_decode_simulated_instructions(&raw_json, idl_registry),
+        ))
+    }
 }
 
 impl VisualSignConverterFromString<SolanaTransactionWrapper> for SolanaVisualSignConverter {}
 
-/// Public API function for ease of use with legacy transactions
+/// Public API function for ease of use with legacy transactions.
+///
+/// Takes `solana-transaction` 6 types. Callers using `solana-sdk` 2.x must
+/// migrate their transaction types or use [`transaction_string_to_visual_sign`].
 pub fn transaction_to_visual_sign(
     transaction: SolanaTransaction,
     options: VisualSignOptions,
@@ -651,7 +689,10 @@ pub fn transaction_to_visual_sign(
         .map(|r| r.payload)
 }
 
-/// Public API function for versioned transactions
+/// Public API function for versioned transactions.
+///
+/// Takes `solana-transaction` 6 types. Callers using `solana-sdk` 2.x must
+/// migrate their transaction types or use [`transaction_string_to_visual_sign`].
 pub fn versioned_transaction_to_visual_sign(
     transaction: VersionedTransaction,
     options: VisualSignOptions,
@@ -847,13 +888,18 @@ fn convert_versioned_to_visual_sign_payload(
             #[cfg(feature = "diagnostics")]
             lint_config,
         ),
+        VersionedMessage::V1(_) => Err(VisualSignError::ParseError(
+            TransactionParseError::UnsupportedVersion(
+                "Solana message format v1 (SIMD-0385) is not supported".to_string(),
+            ),
+        )),
     }
 }
 
 /// Convert V0 transaction to visual sign payload
 fn convert_v0_to_visual_sign_payload(
     versioned_tx: &VersionedTransaction,
-    v0_message: &solana_sdk::message::v0::Message,
+    v0_message: &solana_message::v0::Message,
     decode_transfers: bool,
     title: Option<String>,
     options: &VisualSignOptions,
@@ -995,6 +1041,8 @@ fn convert_v0_to_visual_sign_payload(
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Some imports serve only the `simulation`-gated tests.
+#[cfg_attr(not(feature = "simulation"), allow(unused_imports))]
 mod tests {
     use super::*;
     use crate::core::priority_fee::PriorityFee;
@@ -1004,9 +1052,9 @@ mod tests {
     use crate::test_utils::payload_from_b64;
     use crate::utils::create_transaction_with_empty_signatures;
     use base64::Engine;
-    use solana_sdk::compute_budget::ComputeBudgetInstruction;
-    use solana_sdk::instruction::{AccountMeta, Instruction};
-    use solana_sdk::message::Message;
+    use solana_compute_budget_interface::ComputeBudgetInstruction;
+    use solana_instruction::{AccountMeta, Instruction};
+    use solana_message::Message;
     use solana_system_interface::program as system_program;
 
     /// Test helper: run the converter and unwrap the `ConversionResult` to the
@@ -1019,6 +1067,45 @@ mod tests {
         SolanaVisualSignConverter
             .to_visual_sign_payload(wrapper, options)
             .map(|r| r.payload)
+    }
+
+    /// A build without `simulation` cannot read a supplied simulation, so it
+    /// refuses the request instead of emitting intermediate output without it.
+    #[cfg(not(feature = "simulation"))]
+    #[test]
+    fn supplied_simulation_is_refused_without_the_simulation_feature() {
+        let message = "AgABA3Lgs31rdjnEG5FRyrm2uAi4f+erGdyJl0UtJyMMLGzC9wF+t3qhmhpj3vI369n5Ef5xRLms/Vn8J/Lc7bmoIkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMBafBISARibJ+I25KpHkjLe53ZrqQcLWGy8n97yWD7mAQICAQAMAgAAAADKmjsAAAAA";
+        let wrapper = SolanaTransactionWrapper::from_string(
+            &create_transaction_with_empty_signatures(message),
+        )
+        .expect("known transfer parses");
+        let options = VisualSignOptions {
+            include_intermediate_output: true,
+            decode_transfers: true,
+            metadata: Some(generated::parser::ChainMetadata {
+                metadata: Some(generated::parser::chain_metadata::Metadata::Solana(
+                    generated::parser::SolanaMetadata {
+                        network_id: None,
+                        idl: None,
+                        idl_mappings: Default::default(),
+                        simulated_transaction_result: Some(
+                            base64::engine::general_purpose::STANDARD.encode("{}"),
+                        ),
+                        max_fee_lamports: None,
+                    },
+                )),
+            }),
+            ..VisualSignOptions::default()
+        };
+        let result = SolanaVisualSignConverter.to_visual_sign_payload(wrapper, options);
+        assert!(
+            matches!(
+                result,
+                Err(VisualSignError::ParseError(TransactionParseError::InvalidFormat(ref msg)))
+                    if msg.contains("simulation")
+            ),
+            "got {result:?}"
+        );
     }
 
     /// End-to-end exercise of the opt-in intermediate-output path: a known
@@ -1091,6 +1178,7 @@ mod tests {
     /// completely unaffected by the simulation result, and
     /// `simulated_instructions` is independent of it, with each entry's own
     /// `registered_source` and `index` carried from its group.
+    #[cfg(feature = "simulation")]
     #[test]
     fn intermediate_output_populates_simulated_instructions() {
         let solana_transfer_message = "AgABA3Lgs31rdjnEG5FRyrm2uAi4f+erGdyJl0UtJyMMLGzC9wF+t3qhmhpj3vI369n5Ef5xRLms/Vn8J/Lc7bmoIkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMBafBISARibJ+I25KpHkjLe53ZrqQcLWGy8n97yWD7mAQICAQAMAgAAAADKmjsAAAAA";
@@ -1232,6 +1320,7 @@ mod tests {
     /// the `SignablePayload` and policy degrades to "no metadata".
     /// End to end: a Compute Budget instruction (decoded by the parser's own
     /// decoder) next to a System transfer, both with `parsed_instruction_data`.
+    #[cfg(feature = "simulation")]
     #[test]
     fn intermediate_output_decodes_every_native_instruction() {
         let payer = Pubkey::new_unique();
@@ -1526,11 +1615,11 @@ mod tests {
 
     #[test]
     fn test_address_lookup_table_field_creation() {
-        use solana_sdk::message::v0::MessageAddressTableLookup;
-        use solana_sdk::pubkey::Pubkey;
+        use solana_message::v0::MessageAddressTableLookup;
+        use solana_pubkey::Pubkey;
 
         // Create a mock v0 message with address lookup tables
-        let mut v0_message = solana_sdk::message::v0::Message::default();
+        let mut v0_message = solana_message::v0::Message::default();
 
         // Add two lookup tables with valid pubkeys
         let lookup1 = MessageAddressTableLookup {
@@ -1743,23 +1832,22 @@ mod tests {
     #[test]
     fn test_v0_transfer_with_real_data() {
         // Create a test with known transaction data that should trigger solana-parser
-        use solana_sdk::{
-            message::{VersionedMessage, v0},
-            pubkey::Pubkey,
-            signature::Signature,
-            transaction::VersionedTransaction,
-        };
+        use solana_message::VersionedMessage;
+        use solana_message::v0;
+        use solana_pubkey::Pubkey;
+        use solana_signature::Signature;
+        use solana_transaction::versioned::VersionedTransaction;
 
         // Add a transfer instruction (system transfer)
-        let transfer_instruction = solana_sdk::instruction::CompiledInstruction {
+        let transfer_instruction = solana_message::compiled_instruction::CompiledInstruction {
             program_id_index: 2,                                 // system program
             accounts: vec![0, 1],                                // from fee payer to recipient
             data: vec![2, 0, 0, 0, 0, 202, 154, 59, 0, 0, 0, 0], // transfer 1 SOL (1_000_000_000 lamports)
         };
         // Create a minimal V0 transaction manually to test the decode path
         let mut v0_message = v0::Message {
-            recent_blockhash: solana_sdk::hash::Hash::new_unique(),
-            header: solana_sdk::message::MessageHeader {
+            recent_blockhash: solana_hash::Hash::new_unique(),
+            header: solana_message::MessageHeader {
                 num_required_signatures: 1,
                 num_readonly_signed_accounts: 0,
                 num_readonly_unsigned_accounts: 1,
@@ -1767,7 +1855,7 @@ mod tests {
             account_keys: vec![
                 Pubkey::new_unique(),
                 Pubkey::new_unique(),
-                solana_sdk::system_program::ID,
+                solana_sdk_ids::system_program::ID,
             ],
             address_table_lookups: vec![],
             instructions: vec![transfer_instruction],
@@ -1775,9 +1863,9 @@ mod tests {
 
         // Add some account keys (fee payer, recipient, system program)
         v0_message.account_keys = vec![
-            Pubkey::new_unique(),           // fee payer
-            Pubkey::new_unique(),           // recipient
-            solana_sdk::system_program::ID, // system program
+            Pubkey::new_unique(),               // fee payer
+            Pubkey::new_unique(),               // recipient
+            solana_sdk_ids::system_program::ID, // system program
         ];
 
         // Create a versioned transaction
@@ -1904,21 +1992,21 @@ mod tests {
 
         // This is a manually crafted legacy transaction that should fail VersionedTransaction deserialization
         // but succeed with legacy Transaction deserialization
-        use solana_sdk::{
-            hash::Hash, message::Message, pubkey::Pubkey,
-            transaction::Transaction as SolanaTransaction,
-        };
+        use solana_hash::Hash;
+        use solana_message::Message;
+        use solana_pubkey::Pubkey;
+        use solana_transaction::Transaction as SolanaTransaction;
 
         // Create a minimal legacy transaction
         let legacy_tx = SolanaTransaction {
             signatures: vec![],
             message: Message {
-                header: solana_sdk::message::MessageHeader {
+                header: solana_message::MessageHeader {
                     num_required_signatures: 1,
                     num_readonly_signed_accounts: 0,
                     num_readonly_unsigned_accounts: 1,
                 },
-                account_keys: vec![Pubkey::new_unique(), solana_sdk::system_program::ID],
+                account_keys: vec![Pubkey::new_unique(), solana_sdk_ids::system_program::ID],
                 recent_blockhash: Hash::new_unique(),
                 instructions: vec![],
             },
@@ -2007,10 +2095,12 @@ mod tests {
         // ensures genuinely-unknown programs still flow through the
         // unknown_program visualizer rather than crashing or losing the
         // raw data.
-        use solana_sdk::{
-            hash::Hash, instruction::CompiledInstruction, message::Message, pubkey::Pubkey,
-            signature::Signature, transaction::Transaction as SolanaTransaction,
-        };
+        use solana_hash::Hash;
+        use solana_message::Message;
+        use solana_message::compiled_instruction::CompiledInstruction;
+        use solana_pubkey::Pubkey;
+        use solana_signature::Signature;
+        use solana_transaction::Transaction as SolanaTransaction;
 
         let unknown_program_id = Pubkey::new_from_array([
             0x46, 0x41, 0x4B, 0x45, // "FAKE"
@@ -2023,7 +2113,7 @@ mod tests {
         let instruction_data = vec![0x01, 0x02, 0x03, 0x04, 0x05];
 
         let message = Message {
-            header: solana_sdk::message::MessageHeader {
+            header: solana_message::MessageHeader {
                 num_required_signatures: 1,
                 num_readonly_signed_accounts: 0,
                 num_readonly_unsigned_accounts: 1,
@@ -2089,15 +2179,15 @@ mod tests {
     #[cfg(not(feature = "diagnostics"))]
     #[test]
     fn test_v0_decode_failure_emits_instruction_decoding_note() {
-        let v0_message = solana_sdk::message::v0::Message {
-            header: solana_sdk::message::MessageHeader {
+        let v0_message = solana_message::v0::Message {
+            header: solana_message::MessageHeader {
                 num_required_signatures: 0,
                 num_readonly_signed_accounts: 0,
                 num_readonly_unsigned_accounts: 0,
             },
             account_keys: vec![],
-            recent_blockhash: solana_sdk::hash::Hash::default(),
-            instructions: vec![solana_sdk::instruction::CompiledInstruction {
+            recent_blockhash: solana_hash::Hash::default(),
+            instructions: vec![solana_message::compiled_instruction::CompiledInstruction {
                 program_id_index: 0,
                 accounts: vec![],
                 data: vec![],
@@ -2157,14 +2247,14 @@ mod tests {
     /// signatures) is refused for its size, never misread as `v1`.
     mod unsupported_versions {
         use super::*;
-        use solana_sdk::hash::Hash;
-        use solana_sdk::instruction::CompiledInstruction;
-        use solana_sdk::message::MESSAGE_VERSION_PREFIX;
-        use solana_sdk::message::Message;
-        use solana_sdk::message::MessageHeader;
-        use solana_sdk::message::v0::Message as V0Message;
-        use solana_sdk::signature::SIGNATURE_BYTES;
-        use solana_sdk::signature::Signature;
+        use solana_hash::Hash;
+        use solana_message::MESSAGE_VERSION_PREFIX;
+        use solana_message::Message;
+        use solana_message::MessageHeader;
+        use solana_message::compiled_instruction::CompiledInstruction;
+        use solana_message::v0::Message as V0Message;
+        use solana_signature::SIGNATURE_BYTES;
+        use solana_signature::Signature;
 
         /// Build a spec-shaped SIMD-0385 `v1` transaction.
         fn build_v1(num_required_sigs: u8, num_addresses: u8, data_len: u16) -> Vec<u8> {
@@ -2428,10 +2518,10 @@ mod tests {
     // reverted pending a design that passes resolved ALT data into the parser.
     mod v0_alt_rendering {
         use super::*;
-        use solana_sdk::instruction::CompiledInstruction;
-        use solana_sdk::message::MessageHeader;
-        use solana_sdk::message::v0::{Message as V0Message, MessageAddressTableLookup};
-        use solana_sdk::pubkey::Pubkey;
+        use solana_message::MessageHeader;
+        use solana_message::compiled_instruction::CompiledInstruction;
+        use solana_message::v0::{Message as V0Message, MessageAddressTableLookup};
+        use solana_pubkey::Pubkey;
 
         fn make_v0(
             account_keys: Vec<Pubkey>,
@@ -2445,7 +2535,7 @@ mod tests {
                     num_readonly_unsigned_accounts: 0,
                 },
                 account_keys,
-                recent_blockhash: solana_sdk::hash::Hash::default(),
+                recent_blockhash: solana_hash::Hash::default(),
                 instructions,
                 address_table_lookups,
             }
@@ -3136,15 +3226,15 @@ mod tests {
     }
 
     fn v0_b64(instructions: &[Instruction], payer: &Pubkey) -> String {
-        let message = solana_sdk::message::v0::Message::try_compile(
+        let message = solana_message::v0::Message::try_compile(
             payer,
             instructions,
             &[],
-            solana_sdk::hash::Hash::default(),
+            solana_hash::Hash::default(),
         )
         .expect("compile");
         let tx = VersionedTransaction {
-            signatures: vec![solana_sdk::signature::Signature::default()],
+            signatures: vec![solana_signature::Signature::default()],
             message: VersionedMessage::V0(message),
         };
         base64::engine::general_purpose::STANDARD
@@ -3155,7 +3245,7 @@ mod tests {
     /// cannot decode it, so the fee is unknown and a cap is refused in every build.
     fn malformed_unit_price() -> Instruction {
         Instruction {
-            program_id: solana_sdk::compute_budget::id(),
+            program_id: solana_sdk_ids::compute_budget::id(),
             accounts: vec![],
             data: vec![3, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0, 0xff],
         }
@@ -3166,7 +3256,7 @@ mod tests {
     fn max_fee_counts_precompile_signatures() {
         let payer = Pubkey::new_unique();
         let verify_two = Instruction {
-            program_id: solana_sdk::ed25519_program::id(),
+            program_id: solana_sdk_ids::ed25519_program::id(),
             accounts: vec![],
             data: vec![2, 0, 0, 0],
         };
@@ -3248,7 +3338,7 @@ mod tests {
     fn v0_decoding_failure_elsewhere_keeps_the_max_fee_row() {
         let payer = Pubkey::new_unique();
         let garbage = Instruction {
-            program_id: solana_sdk::system_program::id(),
+            program_id: solana_sdk_ids::system_program::id(),
             accounts: vec![],
             data: vec![0xff; 4],
         };
@@ -3330,10 +3420,10 @@ mod tests {
     /// payload is refused on length alone and never expands into output.
     mod packet_size_limit {
         use super::*;
-        use solana_sdk::hash::Hash;
-        use solana_sdk::instruction::{AccountMeta, Instruction};
-        use solana_sdk::message::Message;
-        use solana_sdk::pubkey::Pubkey;
+        use solana_hash::Hash;
+        use solana_instruction::{AccountMeta, Instruction};
+        use solana_message::Message;
+        use solana_pubkey::Pubkey;
 
         /// An unsigned legacy transaction with one instruction: the payer listed
         /// `account_indexes` times and `data_len` bytes of data.

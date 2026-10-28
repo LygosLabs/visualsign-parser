@@ -3,9 +3,9 @@
 
 use crate::utils::format_token_amount;
 use borsh::BorshDeserialize;
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
-use solana_sdk::instruction::CompiledInstruction;
-use solana_sdk::pubkey::Pubkey;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_message::compiled_instruction::CompiledInstruction;
+use solana_pubkey::Pubkey;
 use visualsign::AnnotatedPayloadField;
 use visualsign::errors::VisualSignError;
 use visualsign::field_builders::create_amount_field;
@@ -23,16 +23,11 @@ pub const BASE_FEE_LAMPORTS_PER_SIGNATURE: u64 = 5_000;
 /// legitimately commits to. A caller's `max_fee_lamports` replaces it.
 pub const DEFAULT_MAX_FEE_LAMPORTS: u64 = 100_000_000;
 
-/// Not re-exported by `solana_sdk` yet; the id from `solana_sdk_ids::secp256r1_program`.
-mod secp256r1_program {
-    solana_sdk::declare_id!("Secp256r1SigVerify1111111111111111111111111");
-}
-
 /// The signature-verification precompiles, whose verifies the runtime charges as signatures.
 fn is_signature_precompile(program_id: &Pubkey) -> bool {
-    solana_sdk::ed25519_program::check_id(program_id)
-        || solana_sdk::secp256k1_program::check_id(program_id)
-        || secp256r1_program::check_id(program_id)
+    solana_sdk_ids::ed25519_program::check_id(program_id)
+        || solana_sdk_ids::secp256k1_program::check_id(program_id)
+        || solana_sdk_ids::secp256r1_program::check_id(program_id)
 }
 
 const SOL_DECIMALS: u8 = 9;
@@ -76,7 +71,7 @@ impl PriorityFee {
         for (index, instruction) in instructions.iter().enumerate() {
             let is_compute_budget = static_account_keys
                 .get(usize::from(instruction.program_id_index))
-                .is_some_and(solana_sdk::compute_budget::check_id);
+                .is_some_and(solana_sdk_ids::compute_budget::check_id);
             if !is_compute_budget {
                 continue;
             }
@@ -367,9 +362,9 @@ mod tests {
     fn test_charged_signatures_add_the_verifies_of_precompile_instructions() {
         let keys = [
             Pubkey::new_unique(),
-            solana_sdk::ed25519_program::id(),
-            solana_sdk::secp256k1_program::id(),
-            secp256r1_program::id(),
+            solana_sdk_ids::ed25519_program::id(),
+            solana_sdk_ids::secp256k1_program::id(),
+            solana_sdk_ids::secp256r1_program::id(),
         ];
         let instructions = [
             compiled(1, vec![2, 0, 0]), // ed25519 verifies two signatures
@@ -385,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_from_instructions_reads_only_compute_budget_requests() {
-        let keys = [Pubkey::new_unique(), solana_sdk::compute_budget::id()];
+        let keys = [Pubkey::new_unique(), solana_sdk_ids::compute_budget::id()];
         let limit = borsh::to_vec(&ComputeBudgetInstruction::SetComputeUnitLimit(300_000)).unwrap();
         let price = borsh::to_vec(&ComputeBudgetInstruction::SetComputeUnitPrice(50_000)).unwrap();
         let instructions = [
@@ -405,7 +400,7 @@ mod tests {
     /// A trailing byte: a newer runtime may accept and charge the request; the parser cannot.
     #[test]
     fn test_from_instructions_fails_closed_on_an_undecodable_request() {
-        let keys = [solana_sdk::compute_budget::id()];
+        let keys = [solana_sdk_ids::compute_budget::id()];
         let instructions = [compiled(0, vec![3, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0, 0xff])];
         let Err(VisualSignError::ValidationError(message)) =
             PriorityFee::from_instructions(&instructions, &keys)
