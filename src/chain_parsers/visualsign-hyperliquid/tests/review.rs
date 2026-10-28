@@ -319,6 +319,23 @@ fn review_unknown_user_signed_primary_type_is_refused() {
 }
 
 #[test]
+fn review_accept_terms_needs_its_exact_primary_type() {
+    // AcceptTerms is allowlisted under `Hyperliquid:AcceptTerms` only; the
+    // `HyperliquidTransaction:` prefix the other actions use must not match it.
+    let input = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/recorded/t1-accept-terms.input.json"
+    ))
+    .unwrap();
+    HyperliquidTransaction::from_string(&input).unwrap();
+    let p = input.replace(
+        "Hyperliquid:AcceptTerms",
+        "HyperliquidTransaction:AcceptTerms",
+    );
+    assert_refused(&p, "unsupported user-signed primaryType");
+}
+
+#[test]
 fn review_user_signed_wrong_domain_name_is_refused() {
     let p = mutate(
         &vector("user_usd_send"),

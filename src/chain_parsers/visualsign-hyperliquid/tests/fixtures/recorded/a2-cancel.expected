@@ -17,10 +17,10 @@
       "Type": "text_v2"
     },
     {
-      "FallbackText": "order 1 on #3",
+      "FallbackText": "order 1 on perp #3",
       "Label": "Cancel 1",
       "TextV2": {
-        "Text": "order 1 on #3"
+        "Text": "order 1 on perp #3"
       },
       "Type": "text_v2"
     },

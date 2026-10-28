@@ -33,10 +33,10 @@
       "Type": "text_v2"
     },
     {
-      "FallbackText": "WARNING: no expiry -- this agent can trade until revoked",
+      "FallbackText": "No expiry in the signed request (Hyperliquid may apply its own default)",
       "Label": "Agent Expiry",
       "TextV2": {
-        "Text": "WARNING: no expiry -- this agent can trade until revoked"
+        "Text": "No expiry in the signed request (Hyperliquid may apply its own default)"
       },
       "Type": "text_v2"
     },

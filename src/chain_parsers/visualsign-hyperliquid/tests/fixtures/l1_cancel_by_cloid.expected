@@ -17,10 +17,10 @@
       "Type": "text_v2"
     },
     {
-      "FallbackText": "client id 0x000000000000000000000000000000ff on #0",
+      "FallbackText": "client id 0x000000000000000000000000000000ff on perp #0",
       "Label": "Cancel 1",
       "TextV2": {
-        "Text": "client id 0x000000000000000000000000000000ff on #0"
+        "Text": "client id 0x000000000000000000000000000000ff on perp #0"
       },
       "Type": "text_v2"
     },

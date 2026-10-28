@@ -7,8 +7,9 @@
 //! claims to commit to, recomputes the hash from the action's exact bytes, refuses on
 //! any mismatch, and renders the action.
 //!
-//! User-signed actions (`HyperliquidTransaction:*`) are plain EIP-712 with readable
-//! fields; they are rendered from the typed data after pinning the domain and types.
+//! User-signed actions (`HyperliquidTransaction:*`, and `Hyperliquid:AcceptTerms`) are
+//! plain EIP-712 with readable fields; they are rendered from the typed data after
+//! pinning the domain and types.
 //!
 //! Everything not on an allowlist is refused: unknown action types, unknown
 //! user-signed primary types, and unknown fields.

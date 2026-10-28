@@ -103,6 +103,8 @@ fn recorded_testnet_payloads_parse_and_match_their_snapshots() {
         ("a2-cancel", "Hyperliquid L1 Action"),
         ("b2-approve-agent-0x1", "Hyperliquid User-Signed Action"),
         ("e1-approve-expiring", "Hyperliquid User-Signed Action"),
+        ("r1-remove-agent", "Hyperliquid User-Signed Action"),
+        ("t1-accept-terms", "Hyperliquid User-Signed Action"),
     ];
     for (name, kind) in names {
         let input = std::fs::read_to_string(dir.join(format!("{name}.input.json"))).unwrap();

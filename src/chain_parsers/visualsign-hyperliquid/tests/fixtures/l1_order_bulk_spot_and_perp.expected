@@ -25,7 +25,7 @@
       "Type": "text_v2"
     },
     {
-      "FallbackText": "Buy 100 of #10000 at 0.2, Limit (Alo)",
+      "FallbackText": "Buy 100 of spot #0 (asset 10000) at 0.2, Limit (Alo)",
       "Label": "Order 1",
       "PreviewLayout": {
         "Condensed": {
@@ -34,10 +34,10 @@
         "Expanded": {
           "Fields": [
             {
-              "FallbackText": "#10000",
+              "FallbackText": "spot #0 (asset 10000)",
               "Label": "Asset",
               "TextV2": {
-                "Text": "#10000"
+                "Text": "spot #0 (asset 10000)"
               },
               "Type": "text_v2"
             },
@@ -84,7 +84,7 @@
           ]
         },
         "Subtitle": {
-          "Text": "Buy 100 of #10000 at 0.2, Limit (Alo)"
+          "Text": "Buy 100 of spot #0 (asset 10000) at 0.2, Limit (Alo)"
         },
         "Title": {
           "Text": "Order 1"
@@ -93,7 +93,7 @@
       "Type": "preview_layout"
     },
     {
-      "FallbackText": "Sell 0.5 of #0 at 120000, Limit (Ioc)",
+      "FallbackText": "Sell 0.5 of perp #0 at 120000, Limit (Ioc)",
       "Label": "Order 2",
       "PreviewLayout": {
         "Condensed": {
@@ -102,10 +102,10 @@
         "Expanded": {
           "Fields": [
             {
-              "FallbackText": "#0",
+              "FallbackText": "perp #0",
               "Label": "Asset",
               "TextV2": {
-                "Text": "#0"
+                "Text": "perp #0"
               },
               "Type": "text_v2"
             },
@@ -152,7 +152,7 @@
           ]
         },
         "Subtitle": {
-          "Text": "Sell 0.5 of #0 at 120000, Limit (Ioc)"
+          "Text": "Sell 0.5 of perp #0 at 120000, Limit (Ioc)"
         },
         "Title": {
           "Text": "Order 2"

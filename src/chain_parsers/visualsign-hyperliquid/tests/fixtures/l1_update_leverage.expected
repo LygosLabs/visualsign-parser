@@ -17,10 +17,10 @@
       "Type": "text_v2"
     },
     {
-      "FallbackText": "#1",
+      "FallbackText": "perp #1",
       "Label": "Asset",
       "TextV2": {
-        "Text": "#1"
+        "Text": "perp #1"
       },
       "Type": "text_v2"
     },

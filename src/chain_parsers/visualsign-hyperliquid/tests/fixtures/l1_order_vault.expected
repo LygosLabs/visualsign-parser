@@ -25,7 +25,7 @@
       "Type": "text_v2"
     },
     {
-      "FallbackText": "Buy 0.01 of #0 at 99000, Limit (Gtc)",
+      "FallbackText": "Buy 0.01 of perp #0 at 99000, Limit (Gtc)",
       "Label": "Order 1",
       "PreviewLayout": {
         "Condensed": {
@@ -34,10 +34,10 @@
         "Expanded": {
           "Fields": [
             {
-              "FallbackText": "#0",
+              "FallbackText": "perp #0",
               "Label": "Asset",
               "TextV2": {
-                "Text": "#0"
+                "Text": "perp #0"
               },
               "Type": "text_v2"
             },
@@ -84,7 +84,7 @@
           ]
         },
         "Subtitle": {
-          "Text": "Buy 0.01 of #0 at 99000, Limit (Gtc)"
+          "Text": "Buy 0.01 of perp #0 at 99000, Limit (Gtc)"
         },
         "Title": {
           "Text": "Order 1"

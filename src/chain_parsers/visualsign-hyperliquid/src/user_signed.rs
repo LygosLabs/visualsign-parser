@@ -12,19 +12,20 @@ use serde_json::Value;
 
 /// One allowlisted user-signed action.
 pub struct UserSignedSpec {
-    /// `X` in `HyperliquidTransaction:X`.
+    /// Short name used in labels and errors.
     pub name: &'static str,
+    /// The exact EIP-712 `primaryType`.
+    pub primary_type: &'static str,
     /// Value of the request's `type` key for this action.
     pub action_type: &'static str,
     /// The pinned EIP-712 fields, in order.
     pub fields: &'static [(&'static str, &'static str)],
 }
 
-pub const PRIMARY_TYPE_PREFIX: &str = "HyperliquidTransaction:";
-
 pub const SPECS: &[UserSignedSpec] = &[
     UserSignedSpec {
         name: "ApproveAgent",
+        primary_type: "HyperliquidTransaction:ApproveAgent",
         action_type: "approveAgent",
         fields: &[
             ("hyperliquidChain", "string"),
@@ -35,6 +36,7 @@ pub const SPECS: &[UserSignedSpec] = &[
     },
     UserSignedSpec {
         name: "TokenDelegate",
+        primary_type: "HyperliquidTransaction:TokenDelegate",
         action_type: "tokenDelegate",
         fields: &[
             ("hyperliquidChain", "string"),
@@ -46,6 +48,7 @@ pub const SPECS: &[UserSignedSpec] = &[
     },
     UserSignedSpec {
         name: "Withdraw",
+        primary_type: "HyperliquidTransaction:Withdraw",
         action_type: "withdraw3",
         fields: &[
             ("hyperliquidChain", "string"),
@@ -56,6 +59,7 @@ pub const SPECS: &[UserSignedSpec] = &[
     },
     UserSignedSpec {
         name: "UsdSend",
+        primary_type: "HyperliquidTransaction:UsdSend",
         action_type: "usdSend",
         fields: &[
             ("hyperliquidChain", "string"),
@@ -66,6 +70,7 @@ pub const SPECS: &[UserSignedSpec] = &[
     },
     UserSignedSpec {
         name: "SpotSend",
+        primary_type: "HyperliquidTransaction:SpotSend",
         action_type: "spotSend",
         fields: &[
             ("hyperliquidChain", "string"),
@@ -77,6 +82,7 @@ pub const SPECS: &[UserSignedSpec] = &[
     },
     UserSignedSpec {
         name: "SendAsset",
+        primary_type: "HyperliquidTransaction:SendAsset",
         action_type: "sendAsset",
         fields: &[
             ("hyperliquidChain", "string"),
@@ -91,6 +97,7 @@ pub const SPECS: &[UserSignedSpec] = &[
     },
     UserSignedSpec {
         name: "ApproveBuilderFee",
+        primary_type: "HyperliquidTransaction:ApproveBuilderFee",
         action_type: "approveBuilderFee",
         fields: &[
             ("hyperliquidChain", "string"),
@@ -101,6 +108,7 @@ pub const SPECS: &[UserSignedSpec] = &[
     },
     UserSignedSpec {
         name: "UsdClassTransfer",
+        primary_type: "HyperliquidTransaction:UsdClassTransfer",
         action_type: "usdClassTransfer",
         fields: &[
             ("hyperliquidChain", "string"),
@@ -108,6 +116,14 @@ pub const SPECS: &[UserSignedSpec] = &[
             ("toPerp", "bool"),
             ("nonce", "uint64"),
         ],
+    },
+    // Signed once when the Hyperliquid app first connects a wallet. It moves no funds.
+    // Unlike the others, its primaryType has no `HyperliquidTransaction:` prefix.
+    UserSignedSpec {
+        name: "AcceptTerms",
+        primary_type: "Hyperliquid:AcceptTerms",
+        action_type: "acceptTerms",
+        fields: &[("hyperliquidChain", "string"), ("time", "uint64")],
     },
 ];
 
@@ -121,8 +137,7 @@ pub enum FieldValue {
 }
 
 pub fn spec_for(primary_type: &str) -> Option<&'static UserSignedSpec> {
-    let name = primary_type.strip_prefix(PRIMARY_TYPE_PREFIX)?;
-    SPECS.iter().find(|s| s.name == name)
+    SPECS.iter().find(|s| s.primary_type == primary_type)
 }
 
 fn is_address(s: &str) -> bool {

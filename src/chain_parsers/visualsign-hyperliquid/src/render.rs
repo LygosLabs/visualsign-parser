@@ -1,8 +1,10 @@
 //! Render verified requests as [`SignablePayload`] fields.
 //!
 //! Values are shown as signed: prices, sizes and decimal amounts are the exact
-//! strings from the action, and assets are shown by index (`#<index>`); mapping
-//! indices to symbols needs exchange metadata and is a later milestone.
+//! strings from the action. Assets are shown by index: a trading asset is labelled
+//! perp, spot or builder-deployed perp from its index range, and other indices
+//! (tokens, outcomes) as `#<index>`. Mapping indices to symbols needs exchange
+//! metadata and is a later milestone.
 
 use visualsign::field_builders::{create_address_field, create_preview_layout, create_text_field};
 use visualsign::time_fmt::format_timestamp_ms;
@@ -33,6 +35,25 @@ fn timestamp(ms: u64) -> String {
 
 fn asset(index: u64) -> String {
     format!("#{index}")
+}
+
+/// A trading asset id, which encodes its market in its range: perps are `index`,
+/// spot pairs `10000 + index`, and builder-deployed (HIP-3) perps
+/// `100000 + dex * 10000 + index`. The raw id is kept whenever it differs from the
+/// index shown, so the label can be checked against the signed action.
+fn trading_asset(id: u64) -> String {
+    match id {
+        0..10_000 => format!("perp #{id}"),
+        10_000..100_000 => format!("spot #{} (asset {id})", id - 10_000),
+        _ => {
+            let rest = id - 100_000;
+            format!(
+                "builder perp dex {} #{} (asset {id})",
+                rest / 10_000,
+                rest % 10_000
+            )
+        }
+    }
 }
 
 fn yes_no(b: bool) -> &'static str {
@@ -140,7 +161,7 @@ fn order_type(t: &OrderTypeWire) -> String {
 
 fn order_fields(o: &OrderWire) -> R<Fields> {
     let mut f = vec![
-        text("Asset", &asset(o.a))?,
+        text("Asset", &trading_asset(o.a))?,
         text("Side", side(o.b))?,
         text("Limit Price", &o.p)?,
         text("Size", &o.s)?,
@@ -160,7 +181,7 @@ fn order_subtitle(o: &OrderWire) -> String {
         "{} {} of {} at {}, {}{}",
         side(o.b),
         o.s,
-        asset(o.a),
+        trading_asset(o.a),
         o.p,
         order_type(&o.t),
         if o.r { ", reduce-only" } else { "" }
@@ -265,7 +286,7 @@ fn action_fields(action: &L1Action) -> R<Fields> {
             for (i, c) in a.cancels.iter().enumerate() {
                 f.push(text(
                     &format!("Cancel {}", i + 1),
-                    &format!("order {} on {}", c.o, asset(c.a)),
+                    &format!("order {} on {}", c.o, trading_asset(c.a)),
                 )?);
             }
             if let Some(fast) = a.f {
@@ -276,7 +297,7 @@ fn action_fields(action: &L1Action) -> R<Fields> {
             for (i, c) in a.cancels.iter().enumerate() {
                 f.push(text(
                     &format!("Cancel {}", i + 1),
-                    &format!("client id {} on {}", c.cloid, asset(c.asset)),
+                    &format!("client id {} on {}", c.cloid, trading_asset(c.asset)),
                 )?);
             }
             if let Some(fast) = a.f {
@@ -309,7 +330,7 @@ fn action_fields(action: &L1Action) -> R<Fields> {
                 .unwrap_or_else(|| "Unset (clears any scheduled cancel)".to_string()),
         )?),
         L1Action::UpdateLeverage(u) => {
-            f.push(text("Asset", &asset(u.asset))?);
+            f.push(text("Asset", &trading_asset(u.asset))?);
             f.push(text("Leverage", &format!("{}x", u.leverage))?);
             f.push(text(
                 "Margin Mode",
@@ -317,7 +338,7 @@ fn action_fields(action: &L1Action) -> R<Fields> {
             )?);
         }
         L1Action::UpdateIsolatedMargin(u) => {
-            f.push(text("Asset", &asset(u.asset))?);
+            f.push(text("Asset", &trading_asset(u.asset))?);
             f.push(text(
                 if u.ntli < 0 {
                     "Remove Margin (USDC)"
@@ -330,7 +351,7 @@ fn action_fields(action: &L1Action) -> R<Fields> {
         }
         L1Action::TwapOrder(t) => {
             let w = &t.twap;
-            f.push(text("Asset", &asset(w.a))?);
+            f.push(text("Asset", &trading_asset(w.a))?);
             f.push(text("Side", side(w.b))?);
             f.push(text("Size", &w.s)?);
             f.push(text("Duration (minutes)", &w.m.to_string())?);
@@ -338,7 +359,7 @@ fn action_fields(action: &L1Action) -> R<Fields> {
             f.push(text("Reduce Only", yes_no(w.r))?);
         }
         L1Action::TwapCancel(t) => {
-            f.push(text("Asset", &asset(t.a))?);
+            f.push(text("Asset", &trading_asset(t.a))?);
             f.push(text("TWAP ID", &t.t.to_string())?);
         }
         L1Action::VaultTransfer(v) => {
@@ -602,6 +623,7 @@ fn user_label(name: &str) -> &'static str {
         "SendAsset" => "Send Asset",
         "ApproveBuilderFee" => "Approve Builder Fee",
         "UsdClassTransfer" => "Transfer USDC Between Spot and Perp",
+        "AcceptTerms" => "Accept Hyperliquid Terms",
         _ => "Unknown",
     }
 }
@@ -628,8 +650,22 @@ fn field_label(name: &str) -> &'static str {
     }
 }
 
+/// Approving the zero address removes the agent: Hyperliquid's "Remove API Wallet".
+fn is_agent_revoke(req: &UserSignedRequest) -> bool {
+    req.spec_name == "ApproveAgent"
+        && req.fields.iter().any(|(name, value)| {
+            *name == "agentAddress"
+                && matches!(value, FieldValue::Address(a) if a[2..].bytes().all(|b| b == b'0'))
+        })
+}
+
 pub fn user_signed_payload(req: &UserSignedRequest, title: Option<String>) -> R<SignablePayload> {
-    let label = user_label(req.spec_name);
+    let revoke = is_agent_revoke(req);
+    let label = if revoke {
+        "Revoke API Wallet (Agent)"
+    } else {
+        user_label(req.spec_name)
+    };
     let mut fields: Fields = Vec::new();
     for (name, value) in &req.fields {
         if *name == "hyperliquidChain" {
@@ -665,15 +701,18 @@ pub fn user_signed_payload(req: &UserSignedRequest, title: Option<String>) -> R<
             FieldValue::Bool(b) => fields.push(text(shown, yes_no(*b))?),
         }
         if req.spec_name == "ApproveAgent"
+            && !revoke
             && *name == "agentName"
             && let FieldValue::Str(agent_name) = value
         {
             let expiry = agent_valid_until(agent_name).map_err(VisualSignError::ConversionError)?;
             fields.push(match expiry {
                 Some(ms) => text("Agent Expiry", &timestamp(ms))?,
+                // Hyperliquid may apply its own default lifetime to an agent approved
+                // without one, but nothing in the signed request bounds it.
                 None => text(
                     "Agent Expiry",
-                    "WARNING: no expiry -- this agent can trade until revoked",
+                    "No expiry in the signed request (Hyperliquid may apply its own default)",
                 )?,
             });
         }
@@ -681,4 +720,26 @@ pub fn user_signed_payload(req: &UserSignedRequest, title: Option<String>) -> R<
     fields.push(text("Signature Chain ID", &req.chain_id.to_string())?);
     let title = title.unwrap_or_else(|| format!("Hyperliquid: {label}"));
     Ok(finish(title, fields, "HyperliquidUserSignedAction"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trading_asset_labels_the_market_from_the_index_range() {
+        assert_eq!(trading_asset(3), "perp #3");
+        assert_eq!(trading_asset(9_999), "perp #9999");
+        assert_eq!(trading_asset(10_000), "spot #0 (asset 10000)");
+        assert_eq!(trading_asset(11_035), "spot #1035 (asset 11035)");
+        assert_eq!(trading_asset(99_999), "spot #89999 (asset 99999)");
+        assert_eq!(
+            trading_asset(110_000),
+            "builder perp dex 1 #0 (asset 110000)"
+        );
+        assert_eq!(
+            trading_asset(120_005),
+            "builder perp dex 2 #5 (asset 120005)"
+        );
+    }
 }

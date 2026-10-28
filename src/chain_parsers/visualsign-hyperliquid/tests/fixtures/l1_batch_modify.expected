@@ -17,7 +17,7 @@
       "Type": "text_v2"
     },
     {
-      "FallbackText": "77 -> Buy 0.002 of #0 at 98000, Limit (Gtc)",
+      "FallbackText": "77 -> Buy 0.002 of perp #0 at 98000, Limit (Gtc)",
       "Label": "Modify 1",
       "PreviewLayout": {
         "Condensed": {
@@ -34,10 +34,10 @@
               "Type": "text_v2"
             },
             {
-              "FallbackText": "#0",
+              "FallbackText": "perp #0",
               "Label": "Asset",
               "TextV2": {
-                "Text": "#0"
+                "Text": "perp #0"
               },
               "Type": "text_v2"
             },
@@ -84,7 +84,7 @@
           ]
         },
         "Subtitle": {
-          "Text": "77 -> Buy 0.002 of #0 at 98000, Limit (Gtc)"
+          "Text": "77 -> Buy 0.002 of perp #0 at 98000, Limit (Gtc)"
         },
         "Title": {
           "Text": "Modify 1"
@@ -93,7 +93,7 @@
       "Type": "preview_layout"
     },
     {
-      "FallbackText": "client id 0x00000000000000000000000000000009 -> Sell 3 of #1 at 4100, Limit (Alo)",
+      "FallbackText": "client id 0x00000000000000000000000000000009 -> Sell 3 of perp #1 at 4100, Limit (Alo)",
       "Label": "Modify 2",
       "PreviewLayout": {
         "Condensed": {
@@ -110,10 +110,10 @@
               "Type": "text_v2"
             },
             {
-              "FallbackText": "#1",
+              "FallbackText": "perp #1",
               "Label": "Asset",
               "TextV2": {
-                "Text": "#1"
+                "Text": "perp #1"
               },
               "Type": "text_v2"
             },
@@ -168,7 +168,7 @@
           ]
         },
         "Subtitle": {
-          "Text": "client id 0x00000000000000000000000000000009 -> Sell 3 of #1 at 4100, Limit (Alo)"
+          "Text": "client id 0x00000000000000000000000000000009 -> Sell 3 of perp #1 at 4100, Limit (Alo)"
         },
         "Title": {
           "Text": "Modify 2"

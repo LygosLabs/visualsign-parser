@@ -25,7 +25,7 @@
       "Type": "text_v2"
     },
     {
-      "FallbackText": "Sell 1.25 of #1 at 4000.5, Trigger stop-loss at 3900 (market), reduce-only",
+      "FallbackText": "Sell 1.25 of perp #1 at 4000.5, Trigger stop-loss at 3900 (market), reduce-only",
       "Label": "Order 1",
       "PreviewLayout": {
         "Condensed": {
@@ -34,10 +34,10 @@
         "Expanded": {
           "Fields": [
             {
-              "FallbackText": "#1",
+              "FallbackText": "perp #1",
               "Label": "Asset",
               "TextV2": {
-                "Text": "#1"
+                "Text": "perp #1"
               },
               "Type": "text_v2"
             },
@@ -92,7 +92,7 @@
           ]
         },
         "Subtitle": {
-          "Text": "Sell 1.25 of #1 at 4000.5, Trigger stop-loss at 3900 (market), reduce-only"
+          "Text": "Sell 1.25 of perp #1 at 4000.5, Trigger stop-loss at 3900 (market), reduce-only"
         },
         "Title": {
           "Text": "Order 1"

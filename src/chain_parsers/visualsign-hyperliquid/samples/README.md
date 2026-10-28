@@ -7,13 +7,13 @@ refuses.
 
 | Prefix | Source |
 |---|---|
-| `testnet-` | Recorded on Hyperliquid testnet on 2026-10-26. Signed through the Anchorage browser extension by a simulator HSM built from anchorlabsinc/anchorage#270891, and posted by `@nktkas/hyperliquid` 0.33.3. See `tests/fixtures/recorded/README.md`. |
+| `testnet-` | Recorded on Hyperliquid testnet on 2026-10-26 (`r1-` and `t1-` on 2026-10-28). Signed through the Anchorage browser extension by a simulator HSM built from anchorlabsinc/anchorage#270891, and posted by `@nktkas/hyperliquid` 0.33.3. See `tests/fixtures/recorded/README.md`. |
 | `sdk-` | Built by hyperliquid-python-sdk 0.24.0 (`tests/vectors/generate.py`). |
 | `refused-` | `testnet-a1-order` with the order size changed after signing. The recomputed connectionId no longer matches the signed one, so the parser refuses. |
 
 Covered: order (limit; trigger with cloid and builder fee), cancel, subaccount and vault transfers,
-HIP-3 perp deploy, HIP-4 outcome deploy, and the user-signed USDC send, withdrawal and agent approval
-(with and without an expiry).
+HIP-3 perp deploy, HIP-4 outcome deploy, and the user-signed USDC send, withdrawal, agent approval
+(with and without an expiry), agent removal and terms acceptance.
 
 Regenerate a rendering from `src/`:
 

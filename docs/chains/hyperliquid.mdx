@@ -55,7 +55,7 @@ Floats anywhere in the action are refused. Hyperliquid carries prices and sizes 
 
 Every L1 payload also shows the vault or subaccount it acts for, the nonce as a UTC timestamp, `expiresAfter` as a UTC timestamp, and the verified `connectionId`.
 
-Prices, sizes and decimal amounts appear exactly as signed. Assets appear as `#<index>`. Mapping indices to symbols needs exchange metadata, which is planned for a later release.
+Prices, sizes and decimal amounts appear exactly as signed. Trading assets (in orders, cancels, leverage, margin and TWAP) are labelled by their index range: `perp #<n>` below 10000, `spot #<n> (asset <id>)` for spot pairs (`10000 + n`), and `builder perp dex <d> #<n> (asset <id>)` for builder-deployed perps (`100000 + d * 10000 + n`). Token and outcome indices in deploy actions appear as `#<index>`. Mapping indices to symbols needs exchange metadata, which is planned for a later release.
 
 ### Refused
 
@@ -69,7 +69,7 @@ User-signed actions are plain EIP-712 with readable fields. The domain must be `
 
 | `primaryType` | Fields |
 | --- | --- |
-| `HyperliquidTransaction:ApproveAgent` | agent address, agent name, nonce; agent expiry from `valid_until <ms>` in the name, or a warning when there is none |
+| `HyperliquidTransaction:ApproveAgent` | agent address, agent name, nonce; agent expiry from `valid_until <ms>` in the name, or a note that the signed request carries none (Hyperliquid may apply its own default). The zero agent address is shown as **Revoke API Wallet (Agent)**, with no expiry |
 | `HyperliquidTransaction:TokenDelegate` | validator, wei, undelegate, nonce |
 | `HyperliquidTransaction:Withdraw` | destination, amount, time |
 | `HyperliquidTransaction:UsdSend` | destination, amount, time |
@@ -77,6 +77,7 @@ User-signed actions are plain EIP-712 with readable fields. The domain must be `
 | `HyperliquidTransaction:SendAsset` | destination, source and destination DEX, token, amount, from-subaccount, nonce |
 | `HyperliquidTransaction:ApproveBuilderFee` | max fee rate, builder, nonce |
 | `HyperliquidTransaction:UsdClassTransfer` | amount, to-perp, nonce |
+| `Hyperliquid:AcceptTerms` | time; signed once when the Hyperliquid app first connects a wallet, and moves no funds |
 
 `hyperliquidChain` must be `Mainnet` or `Testnet`. The message may also carry the request's `type` and `signatureChainId`, which the SDK leaves in the dict it signs; they must agree with the primary type and the domain chain id. Any other field, or any other primary type, is refused.
 
@@ -93,7 +94,7 @@ cargo run --bin parser_cli -- decode --chain hyperliquid --output human \
    ├─ Action: Place Order
    ├─ Grouping: na
    ├─ Order 1
-   │     Detail: Buy 0.0003 of #3 at 40200, Limit (Gtc)
+   │     Detail: Buy 0.0003 of perp #3 at 40200, Limit (Gtc)
    ├─ Acting For (Vault / Subaccount): None (signer's own account)
    ├─ Nonce: 2026-10-26 14:10:08 UTC (1793023808821)
    ├─ Expires After: Not set
