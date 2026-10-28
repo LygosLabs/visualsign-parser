@@ -169,8 +169,9 @@ message SolanaMetadata {
   // unsigned_payload.
   optional string simulated_transaction_result = 5;
   // Maximum total fee (base plus priority) the caller allows for this transaction, in
-  // lamports. Rendered as the top-level "Max Fee" row when present. The parser rejects the
-  // request when the fee the transaction commits to exceeds it, so the row is a true cap.
+  // lamports. Absent, the parser's default cap (0.1 SOL) applies. The cap in force is
+  // rendered as the top-level "Max Fee" row and carried in `intermediate_output`; the
+  // parser rejects the request when the fee the transaction commits to exceeds it.
   optional uint64 max_fee_lamports = 6;
 }
 

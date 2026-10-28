@@ -2,8 +2,6 @@
 use crate::core::DecodeInstructionsResult;
 #[cfg(not(feature = "diagnostics"))]
 use crate::core::DecodedInstructions;
-#[cfg(feature = "diagnostics")]
-use crate::core::priority_fee::PriorityFee;
 use crate::core::{
     InstructionVisualizer, SolanaAccount, SummaryAccumulator, VisualizerContext,
     available_visualizers, visualize_with_any,
@@ -170,7 +168,6 @@ pub fn decode_v0_instructions(
             errors: Vec::new(),
             diagnostics,
             summary: None,
-            priority_fee: PriorityFee::default(),
         };
     }
 
@@ -221,7 +218,6 @@ pub fn decode_v0_instructions(
         fields,
         errors,
         diagnostics,
-        priority_fee: summary.priority_fee().clone(),
         summary: summary.finish(),
     }
 }
@@ -277,7 +273,6 @@ pub fn decode_v0_instructions(
 
     Ok(DecodedInstructions {
         fields,
-        priority_fee: summary.priority_fee().clone(),
         summary: summary.finish(),
     })
 }

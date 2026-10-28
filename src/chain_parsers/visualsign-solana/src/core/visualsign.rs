@@ -1,4 +1,6 @@
-use crate::core::priority_fee::{PriorityFee, charged_signatures, max_fee_field};
+use crate::core::priority_fee::{
+    CommittedFee, DEFAULT_MAX_FEE_LAMPORTS, committed_fee, max_fee_field,
+};
 use crate::core::txtypes::{
     create_address_lookup_table_field, decode_v0_instructions, decode_v0_transfers,
 };
@@ -502,8 +504,12 @@ impl VisualSignConverter<SolanaTransactionWrapper> for SolanaVisualSignConverter
         let raw_simulated_instructions =
             extract_raw_simulated_instructions(&options, &idl_registry);
         Ok(
-            match build_intermediate_bytes(&message_hex, &idl_registry, raw_simulated_instructions)
-            {
+            match build_intermediate_bytes(
+                &message_hex,
+                &idl_registry,
+                raw_simulated_instructions,
+                fee_cap_lamports(&options),
+            ) {
                 Some(bytes) => ConversionResult::with_intermediate(payload, bytes),
                 None => ConversionResult::new(payload),
             },
@@ -552,8 +558,9 @@ fn build_intermediate_bytes(
         Vec<crate::intermediate::SolanaSimulatedInstruction>,
         Option<crate::intermediate::SolanaSimulationError>,
     )>,
+    max_fee_lamports: u64,
 ) -> Option<Vec<u8>> {
-    match extract_solana_intermediate_output(message_hex, false, idl_registry) {
+    match extract_solana_intermediate_output(message_hex, false, idl_registry, max_fee_lamports) {
         Ok(mut output) => {
             // Simulation results are independent of static decode.
             if let Some((instructions, simulation_error)) = raw_simulated_instructions {
@@ -595,6 +602,13 @@ fn solana_metadata(options: &VisualSignOptions) -> Option<&generated::parser::So
         generated::parser::chain_metadata::Metadata::Solana(solana) => Some(solana),
         _ => None,
     }
+}
+
+/// The caller's fee cap, or [`DEFAULT_MAX_FEE_LAMPORTS`] when the request carries none.
+fn fee_cap_lamports(options: &VisualSignOptions) -> u64 {
+    solana_metadata(options)
+        .and_then(|solana| solana.max_fee_lamports)
+        .unwrap_or(DEFAULT_MAX_FEE_LAMPORTS)
 }
 
 /// Pulls `simulated_transaction_result` out of `options.metadata`'s Solana
@@ -703,19 +717,11 @@ fn convert_to_visual_sign_payload(
             .map(|e| e.signable_payload_field.clone()),
     );
 
-    // An instruction that failed to render may have been a compute-budget request, so the fee
-    // is unknown and a max fee cannot be checked.
     #[cfg(feature = "diagnostics")]
-    let (summary, priority_fee) = (
-        decode_result.summary.clone(),
-        decode_result
-            .errors
-            .is_empty()
-            .then(|| decode_result.priority_fee.clone()),
-    );
+    let summary = decode_result.summary.clone();
 
     #[cfg(not(feature = "diagnostics"))]
-    let (summary, priority_fee) = {
+    let summary = {
         let decoded = instructions::decode_instructions(transaction, &idl_registry)?;
         fields.extend(
             decoded
@@ -723,7 +729,7 @@ fn convert_to_visual_sign_payload(
                 .iter()
                 .map(|e| e.signable_payload_field.clone()),
         );
-        (decoded.summary, Some(decoded.priority_fee))
+        decoded.summary
     };
 
     // Decode and sort accounts using the dedicated function
@@ -747,13 +753,12 @@ fn convert_to_visual_sign_payload(
     insert_max_fee(
         &mut fields,
         header_end,
-        options,
-        priority_fee.as_ref(),
-        charged_signatures(
+        fee_cap_lamports(options),
+        committed_fee(
             message.header.num_required_signatures,
             &message.instructions,
             &message.account_keys,
-        ),
+        )?,
     )?;
     Ok(SignablePayload::new(
         0,
@@ -794,27 +799,19 @@ fn apply_transaction_summary(
     Ok((summary.title, summary.subtitle, header_end))
 }
 
-/// Adds the caller's fee cap as a "Max Fee" row after the header rows, once it covers the fee
-/// the transaction commits to. `priority_fee` is `None` when an instruction did not decode.
+/// Adds the fee cap as a "Max Fee" row after the header rows, once it covers the fee the
+/// transaction commits to. The intermediate output carries the same value.
 fn insert_max_fee(
     fields: &mut Vec<SignablePayloadField>,
     header_end: usize,
-    options: &VisualSignOptions,
-    priority_fee: Option<&PriorityFee>,
-    signatures: u64,
+    max_fee_lamports: u64,
+    committed: CommittedFee,
 ) -> Result<(), VisualSignError> {
-    let Some(lamports) = solana_metadata(options).and_then(|m| m.max_fee_lamports) else {
-        return Ok(());
-    };
-    let priority_fee = priority_fee.ok_or_else(|| {
-        VisualSignError::ValidationError(
-            "max fee cannot be checked: the instructions did not decode, so the fee this \
-             transaction commits to is unknown"
-                .to_string(),
-        )
-    })?;
-    priority_fee.committed(signatures)?.check_cap(lamports)?;
-    fields.insert(header_end, max_fee_field(lamports)?.signable_payload_field);
+    committed.check_cap(max_fee_lamports)?;
+    fields.insert(
+        header_end,
+        max_fee_field(max_fee_lamports)?.signable_payload_field,
+    );
     Ok(())
 }
 
@@ -908,16 +905,10 @@ fn convert_v0_to_visual_sign_payload(
         fields.push(instruction_field.signable_payload_field.clone());
     }
     #[cfg(feature = "diagnostics")]
-    let (summary, priority_fee) = (
-        v0_result.summary.clone(),
-        v0_result
-            .errors
-            .is_empty()
-            .then(|| v0_result.priority_fee.clone()),
-    );
+    let summary = v0_result.summary.clone();
 
     #[cfg(not(feature = "diagnostics"))]
-    let (summary, priority_fee) = match decode_v0_instructions(v0_message, &idl_registry) {
+    let summary = match decode_v0_instructions(v0_message, &idl_registry) {
         Ok(decoded) => {
             for (index, instruction_field) in decoded.fields.iter().enumerate() {
                 tracing::debug!(
@@ -927,7 +918,7 @@ fn convert_v0_to_visual_sign_payload(
                 );
                 fields.push(instruction_field.signable_payload_field.clone());
             }
-            (decoded.summary, Some(decoded.priority_fee))
+            decoded.summary
         }
         Err(e) => {
             // Add a note about instruction decoding failure
@@ -940,7 +931,7 @@ fn convert_v0_to_visual_sign_payload(
                     text: format!("Instruction decoding failed: {e}"),
                 },
             });
-            (None, None)
+            None
         }
     };
 
@@ -986,13 +977,12 @@ fn convert_v0_to_visual_sign_payload(
     insert_max_fee(
         &mut fields,
         header_end,
-        options,
-        priority_fee.as_ref(),
-        charged_signatures(
+        fee_cap_lamports(options),
+        committed_fee(
             v0_message.header.num_required_signatures,
             &v0_message.instructions,
             &v0_message.account_keys,
-        ),
+        )?,
     )?;
     Ok(SignablePayload::new(
         0,
@@ -1007,6 +997,7 @@ fn convert_v0_to_visual_sign_payload(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::core::priority_fee::PriorityFee;
     use crate::intermediate::{
         RegisteredSource, SOLANA_INTERMEDIATE_SCHEMA_VERSION, SolanaIntermediateOutput,
     };
@@ -1071,6 +1062,7 @@ mod tests {
         let decoded: SolanaIntermediateOutput =
             borsh::from_slice(bytes).expect("emitted bytes decode into the published schema");
         assert_eq!(decoded.schema_version, SOLANA_INTERMEDIATE_SCHEMA_VERSION);
+        assert_eq!(decoded.max_fee_lamports, DEFAULT_MAX_FEE_LAMPORTS);
 
         // Cross-check (drift guard): the intermediate's transfer amount must
         // agree with the human-readable SignablePayload. The known tx transfers
@@ -1337,7 +1329,8 @@ mod tests {
         // must fail and the helper must return `None`.
         let registry = IdlRegistry::new();
         assert!(
-            build_intermediate_bytes("deadbeef", &registry, None).is_none(),
+            build_intermediate_bytes("deadbeef", &registry, None, DEFAULT_MAX_FEE_LAMPORTS)
+                .is_none(),
             "undecodable input must degrade to None, not panic or error"
         );
     }
@@ -3010,6 +3003,12 @@ mod tests {
         }
     }
 
+    fn base_fee_only(signatures: u64) -> CommittedFee {
+        PriorityFee::default()
+            .committed(signatures)
+            .expect("no compute budget requests")
+    }
+
     #[test]
     fn max_fee_row_follows_the_hoisted_rows() {
         let payer = Pubkey::new_unique();
@@ -3022,14 +3021,7 @@ mod tests {
             "Default",
         )
         .expect("apply");
-        insert_max_fee(
-            &mut fields,
-            header_end,
-            &options_with_max_fee(Some(5_105_000)),
-            Some(&PriorityFee::default()),
-            1,
-        )
-        .expect("insert");
+        insert_max_fee(&mut fields, header_end, 5_105_000, base_fee_only(1)).expect("insert");
         let labels: Vec<&str> = fields.iter().map(|f| f.label().as_str()).collect();
         assert_eq!(labels, ["Network", "From", "Amount", "Max Fee", "Network"]);
         assert_eq!(fields[3].fallback_text(), "0.005105 SOL");
@@ -3038,32 +3030,24 @@ mod tests {
     #[test]
     fn max_fee_row_follows_network_without_a_summary() {
         let mut fields = vec![network_row(), network_row()];
-        insert_max_fee(
-            &mut fields,
-            1,
-            &options_with_max_fee(Some(5_000)),
-            Some(&PriorityFee::default()),
-            1,
-        )
-        .expect("insert");
+        insert_max_fee(&mut fields, 1, 5_000, base_fee_only(1)).expect("insert");
         let labels: Vec<&str> = fields.iter().map(|f| f.label().as_str()).collect();
         assert_eq!(labels, ["Network", "Max Fee", "Network"]);
     }
 
-    /// Without a cap nothing is checked, so an unknown fee is fine too.
+    /// No caller cap, no metadata at all, or a cap of zero: the value in force is explicit.
     #[test]
-    fn no_max_fee_means_no_row() {
-        let mut fields = vec![network_row()];
-        insert_max_fee(&mut fields, 1, &options_with_max_fee(None), None, 1).expect("insert");
-        insert_max_fee(
-            &mut fields,
-            1,
-            &VisualSignOptions::default(),
-            Some(&PriorityFee::default()),
-            1,
-        )
-        .expect("insert");
-        assert_eq!(fields.len(), 1);
+    fn max_fee_defaults_when_the_caller_supplies_none() {
+        assert_eq!(
+            fee_cap_lamports(&options_with_max_fee(None)),
+            DEFAULT_MAX_FEE_LAMPORTS
+        );
+        assert_eq!(
+            fee_cap_lamports(&VisualSignOptions::default()),
+            DEFAULT_MAX_FEE_LAMPORTS
+        );
+        assert_eq!(fee_cap_lamports(&options_with_max_fee(Some(5_000))), 5_000);
+        assert_eq!(fee_cap_lamports(&options_with_max_fee(Some(0))), 0);
     }
 
     /// The cap must cover the base fee plus the priority fee the compute budget commits to.
@@ -3072,42 +3056,19 @@ mod tests {
         let mut fee = PriorityFee::default();
         fee.record(&ComputeBudgetInstruction::SetComputeUnitLimit(300_000));
         fee.record(&ComputeBudgetInstruction::SetComputeUnitPrice(50_000));
+        let committed = fee.committed(1).expect("one price and one limit");
         let mut fields = vec![network_row()];
 
-        let rejected = insert_max_fee(
-            &mut fields,
-            1,
-            &options_with_max_fee(Some(19_999)),
-            Some(&fee),
-            1,
-        );
+        let rejected = insert_max_fee(&mut fields, 1, 19_999, committed);
         assert!(
             matches!(rejected, Err(VisualSignError::ValidationError(_))),
             "{rejected:?}"
         );
         assert_eq!(fields.len(), 1, "no row on rejection");
 
-        insert_max_fee(
-            &mut fields,
-            1,
-            &options_with_max_fee(Some(20_000)),
-            Some(&fee),
-            1,
-        )
-        .expect("a cap equal to the committed fee passes");
+        insert_max_fee(&mut fields, 1, 20_000, committed)
+            .expect("a cap equal to the committed fee passes");
         assert_eq!(fields[1].label(), "Max Fee");
-    }
-
-    /// With no decoded fee the cap cannot be checked, so the request is refused.
-    #[test]
-    fn max_fee_needs_a_decoded_fee() {
-        let mut fields = vec![network_row()];
-        let rejected = insert_max_fee(&mut fields, 1, &options_with_max_fee(Some(5_000)), None, 1);
-        assert!(
-            matches!(rejected, Err(VisualSignError::ValidationError(_))),
-            "{rejected:?}"
-        );
-        assert_eq!(fields.len(), 1);
     }
 
     /// End to end: the row is rendered from caller metadata on a transaction whose
@@ -3127,11 +3088,13 @@ mod tests {
         assert_eq!(&labels[..2], ["Network", "Max Fee"], "layout: {labels:?}");
         assert_eq!(payload.fields[1].fallback_text(), "0.005105 SOL");
 
+        // Without a caller cap the default takes the same place.
         let without = SolanaVisualSignConverter
             .to_visual_sign_payload(wrapper.clone(), options_with_max_fee(None))
             .expect("converts")
             .payload;
-        assert!(without.fields.iter().all(|f| f.label() != "Max Fee"));
+        assert_eq!(without.fields[1].label(), "Max Fee");
+        assert_eq!(without.fields[1].fallback_text(), "0.1 SOL");
 
         // Two required signatures commit to a 10_000 lamport base fee.
         assert!(matches!(
@@ -3188,8 +3151,8 @@ mod tests {
             .encode(bincode::serialize(&tx).expect("serialize"))
     }
 
-    /// A unit price with a trailing byte: the runtime still charges it, the parser cannot
-    /// decode it, so the fee is unknown and a cap is refused in every build.
+    /// A unit price with a trailing byte: a newer runtime may accept and charge it, the parser
+    /// cannot decode it, so the fee is unknown and a cap is refused in every build.
     fn malformed_unit_price() -> Instruction {
         Instruction {
             program_id: solana_sdk::compute_budget::id(),
@@ -3218,35 +3181,149 @@ mod tests {
             .expect("a cap equal to the base fee passes");
     }
 
+    /// The fee is unknown, so neither a caller cap nor the default can be checked.
     #[test]
-    fn malformed_compute_budget_refuses_a_cap() {
+    fn malformed_compute_budget_refuses_every_cap() {
         let payer = Pubkey::new_unique();
         let wrapper =
             SolanaTransactionWrapper::from_string(&legacy_b64(&[malformed_unit_price()], &payer))
                 .expect("parses");
-        let rejected = to_payload(wrapper.clone(), options_with_max_fee(Some(5_000)));
-        assert!(rejected.is_err(), "{rejected:?}");
-        #[cfg(feature = "diagnostics")]
-        {
+        for options in [
+            options_with_max_fee(Some(5_000)),
+            options_with_max_fee(None),
+        ] {
+            let rejected = to_payload(wrapper.clone(), options);
+            assert!(rejected.is_err(), "{rejected:?}");
+            #[cfg(feature = "diagnostics")]
             assert!(matches!(rejected, Err(VisualSignError::ValidationError(_))));
-            to_payload(wrapper, options_with_max_fee(None))
-                .expect("the diagnostics build renders without a cap");
         }
     }
 
-    /// The V0 converter degrades to a decoding note; a cap it cannot check is still refused.
+    /// The V0 converter degrades to a decoding note, but a fee it cannot determine refuses
+    /// the default cap and a caller's alike.
     #[test]
-    fn v0_malformed_compute_budget_refuses_a_cap() {
+    fn v0_malformed_compute_budget_refuses_every_cap() {
         let payer = Pubkey::new_unique();
         let wrapper =
             SolanaTransactionWrapper::from_string(&v0_b64(&[malformed_unit_price()], &payer))
                 .expect("parses");
         assert_eq!(wrapper.transaction_type(), "Solana (V0)");
+        for options in [
+            options_with_max_fee(Some(5_000)),
+            options_with_max_fee(None),
+        ] {
+            assert!(matches!(
+                to_payload(wrapper.clone(), options),
+                Err(VisualSignError::ValidationError(_))
+            ));
+        }
+    }
+
+    /// A repeated unit price fails the transaction on chain, so the fee is unknown and the
+    /// default cap is refused like a caller's, in both converters.
+    #[test]
+    fn repeated_compute_budget_request_refuses_every_cap() {
+        let payer = Pubkey::new_unique();
+        let twice = [
+            ComputeBudgetInstruction::set_compute_unit_price(1),
+            ComputeBudgetInstruction::set_compute_unit_price(2),
+        ];
+        for encoded in [legacy_b64(&twice, &payer), v0_b64(&twice, &payer)] {
+            let wrapper = SolanaTransactionWrapper::from_string(&encoded).expect("parses");
+            for options in [
+                options_with_max_fee(None),
+                options_with_max_fee(Some(u64::MAX)),
+            ] {
+                assert!(matches!(
+                    to_payload(wrapper.clone(), options),
+                    Err(VisualSignError::ValidationError(_))
+                ));
+            }
+        }
+    }
+
+    /// A failure in another program's instruction leaves the fee known: the V0 converter adds
+    /// its decoding note and the cap is still checked and rendered.
+    #[test]
+    fn v0_decoding_failure_elsewhere_keeps_the_max_fee_row() {
+        let payer = Pubkey::new_unique();
+        let garbage = Instruction {
+            program_id: solana_sdk::system_program::id(),
+            accounts: vec![],
+            data: vec![0xff; 4],
+        };
+        let instructions = [
+            ComputeBudgetInstruction::set_compute_unit_price(1_000),
+            garbage,
+        ];
+        let wrapper =
+            SolanaTransactionWrapper::from_string(&v0_b64(&instructions, &payer)).expect("parses");
+        let payload = to_payload(wrapper.clone(), options_with_max_fee(None)).expect("renders");
+        assert_eq!(payload.fields[1].label(), "Max Fee");
+        assert_eq!(payload.fields[1].fallback_text(), "0.1 SOL");
+
+        // One signature plus up to 1_400 lamports of priority fee with no unit limit.
         assert!(matches!(
-            to_payload(wrapper.clone(), options_with_max_fee(Some(5_000))),
+            to_payload(wrapper.clone(), options_with_max_fee(Some(6_399))),
             Err(VisualSignError::ValidationError(_))
         ));
-        to_payload(wrapper, options_with_max_fee(None)).expect("renders without a cap");
+        to_payload(wrapper, options_with_max_fee(Some(6_400))).expect("a cap at the bound passes");
+    }
+
+    /// A committed fee above the default needs a caller cap that covers it.
+    #[test]
+    fn committed_fee_above_the_default_needs_a_caller_cap() {
+        let payer = Pubkey::new_unique();
+        // 1.4M units at 100 lamports each: 0.14 SOL of priority fee on top of the base fee.
+        let instructions = [
+            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+            ComputeBudgetInstruction::set_compute_unit_price(100_000_000),
+        ];
+        let wrapper = SolanaTransactionWrapper::from_string(&legacy_b64(&instructions, &payer))
+            .expect("parses");
+        let Err(VisualSignError::ValidationError(message)) =
+            to_payload(wrapper.clone(), options_with_max_fee(None))
+        else {
+            panic!("the default cap must refuse a 0.14 SOL fee");
+        };
+        assert!(
+            message.starts_with(&format!(
+                "max fee of {DEFAULT_MAX_FEE_LAMPORTS} lamports is below"
+            )),
+            "{message}"
+        );
+
+        let payload = to_payload(wrapper, options_with_max_fee(Some(140_005_000)))
+            .expect("a caller cap covering the fee passes");
+        assert_eq!(payload.fields[1].label(), "Max Fee");
+        assert_eq!(payload.fields[1].fallback_text(), "0.140005 SOL");
+    }
+
+    /// The intermediate output carries the cap the payload renders: the caller's when given,
+    /// the default otherwise.
+    #[test]
+    fn intermediate_output_carries_the_max_fee() {
+        let solana_transfer_message = "AgABA3Lgs31rdjnEG5FRyrm2uAi4f+erGdyJl0UtJyMMLGzC9wF+t3qhmhpj3vI369n5Ef5xRLms/Vn8J/Lc7bmoIkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMBafBISARibJ+I25KpHkjLe53ZrqQcLWGy8n97yWD7mAQICAQAMAgAAAADKmjsAAAAA";
+        let transaction = create_transaction_with_empty_signatures(solana_transfer_message);
+        let wrapper = SolanaTransactionWrapper::from_string(&transaction).expect("parses");
+        for (caller_cap, expected, rendered) in [
+            (None, DEFAULT_MAX_FEE_LAMPORTS, "0.1 SOL"),
+            (Some(5_105_000), 5_105_000, "0.005105 SOL"),
+        ] {
+            let options = VisualSignOptions {
+                include_intermediate_output: true,
+                ..options_with_max_fee(caller_cap)
+            };
+            let result = SolanaVisualSignConverter
+                .to_visual_sign_payload(wrapper.clone(), options)
+                .expect("converts");
+            let bytes = result.intermediate_output.as_deref().expect("emitted");
+            let decoded: SolanaIntermediateOutput = borsh::from_slice(bytes).expect("decodes");
+            assert_eq!(decoded.schema_version, SOLANA_INTERMEDIATE_SCHEMA_VERSION);
+            assert_eq!(decoded.max_fee_lamports, expected);
+            assert_eq!(result.payload.fields[1].label(), "Max Fee");
+            assert_eq!(result.payload.fields[1].fallback_text(), rendered);
+        }
     }
 
     /// The packet-size gate runs before either decoder, so an oversized

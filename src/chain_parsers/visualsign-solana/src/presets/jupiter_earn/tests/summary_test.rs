@@ -153,6 +153,7 @@ fn test_single_deposit_gets_title_subtitle_and_rows() {
             "Recipient",
             "Instruction",
             "Receive",
+            "Max Fee",
             "Instruction 1",
             "Accounts",
         ]),
@@ -253,6 +254,7 @@ fn test_infrastructure_legs_keep_the_summary() {
             "Instruction",
             "Receive",
             "Priority fee",
+            "Max Fee",
             "Instruction 1",
         ]),
         "unexpected top-level layout: {labels:?}"
@@ -321,7 +323,8 @@ fn test_max_fee_below_the_committed_fee_is_rejected() {
     assert!(top_level_labels(&payload).contains(&"Max Fee"));
 }
 
-/// No unit limit: the fee row is an upper bound at the runtime maximum and says so.
+/// No unit limit: the fee row is an upper bound at the runtime maximum and says so. The
+/// 1.4 SOL bound is over the default cap, so the caller raises the cap to cover it.
 #[test]
 fn test_uncapped_priority_fee_is_hoisted_as_a_maximum() {
     let deposit = instruction_from_fixture(&load_fixture("deposit_usdc"));
@@ -329,7 +332,7 @@ fn test_uncapped_priority_fee_is_hoisted_as_a_maximum() {
     let compute_price =
         solana_sdk::compute_budget::ComputeBudgetInstruction::set_compute_unit_price(1_000_000_000);
 
-    let payload = payload_for(&[compute_price, deposit], &payer);
+    let payload = payload_with_max_fee(&[compute_price, deposit], &payer, 1_500_000_000);
 
     assert_eq!(payload.title, "Supply USDC to Jupiter Lend");
     assert!(top_level_value(&payload, "Priority fee").is_none());
@@ -339,6 +342,7 @@ fn test_uncapped_priority_fee_is_hoisted_as_a_maximum() {
         .find(|f| f.label() == "Maximum priority fee")
         .expect("Maximum priority fee row");
     assert_eq!(fee.fallback_text(), "1.4 SOL");
+    assert_eq!(top_level_value(&payload, "Max Fee").unwrap(), "1.5");
 }
 
 /// A deposit with no compute-unit price pays only the base fee: no fee row.

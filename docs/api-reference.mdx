@@ -73,7 +73,7 @@ message SolanaMetadata {
   optional Idl idl = 1;                 // Anchor IDL for decoding (single program)
   map<string, Idl> idl_mappings = 3;    // Map of program_id to IDL (multiple programs)
   optional string simulated_transaction_result = 5; // Base64 simulateTransaction result, for inner (CPI) instructions
-  optional uint64 max_fee_lamports = 6; // Max total fee the caller allows, in lamports; "Max Fee" row, rejected when below the committed fee
+  optional uint64 max_fee_lamports = 6; // Max total fee allowed, in lamports; default 0.1 SOL. "Max Fee" row, rejected when below the committed fee
 }
 ```
 
@@ -190,13 +190,21 @@ grpcurl -plaintext -d '{
 
 ### Solana with a max fee
 
+Every Solana payload carries a top-level "Max Fee" row right after the header
+rows: the caller's `max_fee_lamports` when the request sets one, otherwise the
+parser's default cap of 0.1 SOL (100000000 lamports). The parser rejects the
+request when the transaction commits to more than the cap in force: 5000
+lamports per signature, counting the ones precompile instructions verify, plus
+the compute budget's priority fee. A compute budget instruction the parser
+cannot decode leaves that fee unknown and is rejected as well, as is a
+transaction that repeats the compute unit price or limit, which the runtime
+rejects. With `include_intermediate_output`, the cap in force is also the
+trailing `max_fee_lamports` field of the Solana intermediate output (schema
+version 5).
+
 ```bash
-# Solana with the maximum total fee the caller allows, in lamports. The parser
-# renders it as a top-level "Max Fee" row right after the header rows and
-# rejects the request when the transaction commits to more: 5000 lamports per
-# signature, counting the ones precompile instructions verify, plus the compute
-# budget's priority fee. Over the HTTP gateway the same field is the camelCase
-# key `maxFeeLamports`.
+# Solana with a caller-supplied cap, in lamports. Over the HTTP gateway the same
+# field is the camelCase key `maxFeeLamports`.
 grpcurl -plaintext -d '{
   "unsigned_payload": "AgAAAAAAAA...",
   "chain": "CHAIN_SOLANA",

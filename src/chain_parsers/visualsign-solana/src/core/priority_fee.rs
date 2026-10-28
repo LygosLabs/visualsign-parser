@@ -2,6 +2,7 @@
 //! `ceil(unit_price * unit_limit / 1_000_000)` lamports on the requested limit.
 
 use crate::utils::format_token_amount;
+use borsh::BorshDeserialize;
 use solana_sdk::compute_budget::ComputeBudgetInstruction;
 use solana_sdk::instruction::CompiledInstruction;
 use solana_sdk::pubkey::Pubkey;
@@ -17,6 +18,10 @@ const MICRO_LAMPORTS_PER_LAMPORT: u128 = 1_000_000;
 
 /// Base fee the runtime charges per signature, in lamports; see [`charged_signatures`].
 pub const BASE_FEE_LAMPORTS_PER_SIGNATURE: u64 = 5_000;
+
+/// Fee cap applied when the caller supplies none: 0.1 SOL, well above the fee any transaction
+/// legitimately commits to. A caller's `max_fee_lamports` replaces it.
+pub const DEFAULT_MAX_FEE_LAMPORTS: u64 = 100_000_000;
 
 /// Not re-exported by `solana_sdk` yet; the id from `solana_sdk_ids::secp256r1_program`.
 mod secp256r1_program {
@@ -59,6 +64,32 @@ impl PriorityFee {
             | ComputeBudgetInstruction::SetLoadedAccountsDataSizeLimit(_)
             | ComputeBudgetInstruction::Unused => {}
         }
+    }
+
+    /// The requests in the compute-budget instructions, decoded as the visualizer decodes them.
+    /// One that does not decode leaves the fee unknown: a newer runtime may accept and charge it.
+    pub fn from_instructions(
+        instructions: &[CompiledInstruction],
+        static_account_keys: &[Pubkey],
+    ) -> Result<Self, VisualSignError> {
+        let mut fee = Self::default();
+        for (index, instruction) in instructions.iter().enumerate() {
+            let is_compute_budget = static_account_keys
+                .get(usize::from(instruction.program_id_index))
+                .is_some_and(solana_sdk::compute_budget::check_id);
+            if !is_compute_budget {
+                continue;
+            }
+            let request =
+                ComputeBudgetInstruction::try_from_slice(&instruction.data).map_err(|e| {
+                    VisualSignError::ValidationError(format!(
+                        "the fee this transaction commits to cannot be determined: compute \
+                         budget instruction {index} did not decode: {e}"
+                    ))
+                })?;
+            fee.record(&request);
+        }
+        Ok(fee)
     }
 
     /// A repeated price or limit: the runtime rejects the transaction.
@@ -112,6 +143,18 @@ pub fn charged_signatures(
         .fold(u64::from(num_required_signatures), |total, verifies| {
             total.saturating_add(u64::from(*verifies))
         })
+}
+
+/// The fee the message commits to, from its compiled form alone: the base fee for the
+/// [`charged_signatures`] plus the priority fee its compute-budget instructions request.
+pub fn committed_fee(
+    num_required_signatures: u8,
+    instructions: &[CompiledInstruction],
+    static_account_keys: &[Pubkey],
+) -> Result<CommittedFee, VisualSignError> {
+    PriorityFee::from_instructions(instructions, static_account_keys)?.committed(
+        charged_signatures(num_required_signatures, instructions, static_account_keys),
+    )
 }
 
 impl PriorityFeeEstimate {
@@ -170,7 +213,7 @@ impl CommittedFee {
 }
 
 /// Top-level "Max Fee" row. Rendered only once [`CommittedFee::check_cap`] passes, so the value
-/// is a true upper bound on what the transaction pays rather than the caller's bare claim.
+/// is a true upper bound on what the transaction pays, whether the caller's or the default.
 pub fn max_fee_field(lamports: u64) -> Result<AnnotatedPayloadField, VisualSignError> {
     create_amount_field(
         "Max Fee",
@@ -338,6 +381,48 @@ mod tests {
         ];
         assert_eq!(charged_signatures(1, &instructions, &keys), 1 + 2 + 1 + 3);
         assert_eq!(charged_signatures(2, &[], &keys), 2);
+    }
+
+    #[test]
+    fn test_from_instructions_reads_only_compute_budget_requests() {
+        let keys = [Pubkey::new_unique(), solana_sdk::compute_budget::id()];
+        let limit = borsh::to_vec(&ComputeBudgetInstruction::SetComputeUnitLimit(300_000)).unwrap();
+        let price = borsh::to_vec(&ComputeBudgetInstruction::SetComputeUnitPrice(50_000)).unwrap();
+        let instructions = [
+            compiled(1, limit.clone()),
+            compiled(0, vec![0xff; 4]), // another program: never decoded
+            compiled(1, price),
+            compiled(7, limit), // program index out of range
+        ];
+        let fee = PriorityFee::from_instructions(&instructions, &keys).unwrap();
+        assert_eq!(fee.estimate(), Some(PriorityFeeEstimate::Exact(15_000)));
+        assert_eq!(
+            committed_fee(2, &instructions, &keys).unwrap().lamports(),
+            10_000 + 15_000
+        );
+    }
+
+    /// A trailing byte: a newer runtime may accept and charge the request; the parser cannot.
+    #[test]
+    fn test_from_instructions_fails_closed_on_an_undecodable_request() {
+        let keys = [solana_sdk::compute_budget::id()];
+        let instructions = [compiled(0, vec![3, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0, 0xff])];
+        let Err(VisualSignError::ValidationError(message)) =
+            PriorityFee::from_instructions(&instructions, &keys)
+        else {
+            panic!("an undecodable request must leave the fee unknown");
+        };
+        assert!(
+            message.contains("compute budget instruction 0 did not decode"),
+            "{message}"
+        );
+        assert!(committed_fee(1, &instructions, &keys).is_err());
+    }
+
+    #[test]
+    fn test_default_max_fee_renders_as_a_tenth_of_a_sol() {
+        let field = max_fee_field(DEFAULT_MAX_FEE_LAMPORTS).unwrap();
+        assert_eq!(field.signable_payload_field.fallback_text(), "0.1 SOL");
     }
 
     #[test]
