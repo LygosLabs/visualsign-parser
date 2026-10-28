@@ -105,6 +105,12 @@ pub enum SolanaTransactionWrapper {
     /// envelope also names the signing address, which renders but is not part
     /// of the signed bytes.
     ///
+    /// Adding this variant is a source-compatibility change for embedders: an
+    /// exhaustive `match` over the wrapper stops compiling (E0004) until it
+    /// handles `Message`. That is deliberate and the enum stays exhaustive (no
+    /// `#[non_exhaustive]`): a new kind of signable payload should force each
+    /// embedder to decide whether it signs it, not fall into a wildcard arm.
+    ///
     /// Solana's off-chain message standard (`solana-offchain-message`) prefixes
     /// a header that starts with the `\xffsolana offchain` signing domain. Such a
     /// message never reaches this variant: the envelope carries the message as
@@ -114,10 +120,12 @@ pub enum SolanaTransactionWrapper {
 
 /// An off-chain message envelope, after the fields are lifted out.
 ///
-/// `signer_address` names the key the signature will come from. The enclave
-/// compares the address against the key it is handed, so rendering the address
-/// is what lets a signer see which of their addresses signs. It is checked to
-/// be a Solana address when the envelope is decoded.
+/// `signer_address` is the address the caller says will sign. The parser only
+/// checks that it is a well-formed Solana address and renders it as given; it
+/// does not compare it with any signing key, and has none to compare with. The
+/// consuming wallet must bind this address to the account it has selected for
+/// signing, and must sign exactly the original UTF-8 bytes of `message`, not
+/// the escaped text this parser displays.
 #[derive(Clone, Debug)]
 pub struct OffChainMessage {
     pub message: String,
@@ -904,6 +912,15 @@ fn apply_transaction_summary(
 fn message_to_visual_sign_payload(
     envelope: &OffChainMessage,
 ) -> Result<SignablePayload, VisualSignError> {
+    // `OffChainMessage` has public fields, so an embedder can build the wrapper
+    // without the envelope decoder. Check the address here too, so a
+    // non-address never renders as the signer on either path.
+    if Pubkey::from_str(&envelope.signer_address).is_err() {
+        return Err(TransactionParseError::DecodeError(
+            "signerAddress is not a Solana address".to_string(),
+        )
+        .into());
+    }
     Ok(SignablePayload::new(
         0,
         "Solana Message".to_string(),
@@ -911,8 +928,8 @@ fn message_to_visual_sign_payload(
         vec![
             create_text_field("Message", &escape_display_text(&envelope.message))?
                 .signable_payload_field,
-            // Not escaped: decoding already refused anything that is not a base58
-            // Solana address, and base58 has no character that needs escaping.
+            // Not escaped: checked above to be a base58 Solana address, and
+            // base58 has no character that needs escaping.
             create_text_field("Signer", &envelope.signer_address)?.signable_payload_field,
         ],
         MESSAGE_PAYLOAD_TYPE.to_string(),
@@ -3454,12 +3471,37 @@ mod solana_message_tests {
         }
     }
 
-    /// The signer address renders alongside the message. The enclave compares
-    /// the address against the key it signs with, so a signer reading the
-    /// screen can tell which of their addresses produces the signature.
+    /// The signer address renders alongside the message, exactly as the
+    /// caller supplied it. Binding it to the signing key is the wallet's job.
     #[test]
     fn the_signer_address_renders() {
         let payload = render_message("Sign in to app.example.com");
+        assert_eq!(field_text(&payload, "Signer"), SIGNER);
+    }
+
+    /// The address check holds when an embedder builds the wrapper itself
+    /// rather than decoding an envelope: the parser's only claim about the
+    /// signer is that it is a well-formed address, so it makes that claim on
+    /// both paths. A line break must not be able to forge a second field.
+    #[test]
+    fn a_directly_built_message_with_a_non_address_signer_is_refused() {
+        let wrapper = SolanaTransactionWrapper::Message(OffChainMessage {
+            message: "hi".to_string(),
+            signer_address: format!("{SIGNER}\nMessage: approve everything"),
+        });
+        let err = SolanaVisualSignConverter
+            .to_visual_sign_payload(wrapper, VisualSignOptions::default())
+            .expect_err("a signer that is not an address must not render");
+        assert!(err.to_string().contains("signerAddress"), "{err}");
+
+        let wrapper = SolanaTransactionWrapper::Message(OffChainMessage {
+            message: "hi".to_string(),
+            signer_address: SIGNER.to_string(),
+        });
+        let payload = SolanaVisualSignConverter
+            .to_visual_sign_payload(wrapper, VisualSignOptions::default())
+            .expect("a well-formed address renders")
+            .payload;
         assert_eq!(field_text(&payload, "Signer"), SIGNER);
     }
 
