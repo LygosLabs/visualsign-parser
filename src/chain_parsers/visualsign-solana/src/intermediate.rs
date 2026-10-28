@@ -13,6 +13,7 @@
 //!
 //! Differences from `solana_parser::SolanaMetadata`:
 //! - `signatures` is dropped (unsigned txs have none).
+//! - `native_instruction_decoder` is added: the native decoding this build has.
 //! - `max_fee_lamports` is added: the fee cap the payload renders as "Max Fee".
 //! - All maps use `BTreeMap` so Borsh encoding is byte-deterministic.
 //! - `program_call_args` is emitted as a canonical JSON string
@@ -93,7 +94,7 @@ const NATIVE_INSTRUCTION_DECODER: SolanaNativeInstructionDecoder = if cfg!(featu
 };
 
 /// Top-level Solana intermediate output. Mirrors `solana_parser::SolanaMetadata`
-/// minus `signatures`, plus `max_fee_lamports`.
+/// minus `signatures`, plus `native_instruction_decoder` and `max_fee_lamports`.
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SolanaIntermediateOutput {
     /// Always [`SOLANA_INTERMEDIATE_SCHEMA_VERSION`]. First field so decoders
@@ -2648,12 +2649,19 @@ mod capability_tests {
         };
         let output = build_intermediate_output(&metadata, None, &BTreeMap::new(), 5_105_000);
         let bytes = borsh::to_vec(&output).expect("serializes intermediate output");
-        // Consumers inspect the version before reading the capability tag.
+        // Consumers read the version, then the capability tag, then the v4 body; the fee cap
+        // trails the body.
         assert_eq!(&bytes[..2], &[5, 0]);
         #[cfg(feature = "json-parsed")]
         assert_eq!(bytes[2], 1, "jsonParsed decoder is available");
         #[cfg(not(feature = "json-parsed"))]
         assert_eq!(bytes[2], 0, "only Compute Budget decoding is available");
+        assert_eq!(
+            &bytes[3..7],
+            &[0, 0, 0, 0],
+            "the body opens with account_keys' length"
+        );
+        assert_eq!(bytes[bytes.len() - 8..], 5_105_000u64.to_le_bytes());
         assert_eq!(
             borsh::from_slice::<SolanaIntermediateOutput>(&bytes).expect("round trip"),
             output

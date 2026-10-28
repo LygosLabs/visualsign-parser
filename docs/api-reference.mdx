@@ -199,8 +199,9 @@ the compute budget's priority fee. A compute budget instruction the parser
 cannot decode leaves that fee unknown and is rejected as well, as is a
 transaction that repeats the compute unit price or limit, which the runtime
 rejects. With `include_intermediate_output`, the cap in force is also the
-trailing `max_fee_lamports` field of the Solana intermediate output (schema
-version 5).
+trailing `max_fee_lamports` field of the Solana intermediate output. That output
+is at schema version 5, which also adds a `native_instruction_decoder` tag right
+after the version.
 
 ```bash
 # Solana with a caller-supplied cap, in lamports. Over the HTTP gateway the same

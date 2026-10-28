@@ -1060,6 +1060,47 @@ mod tests {
             .map(|r| r.payload)
     }
 
+    /// A build without `simulation` cannot read a supplied simulation. The intermediate
+    /// output says so instead of the request being refused.
+    #[cfg(not(feature = "simulation"))]
+    #[test]
+    fn supplied_simulation_is_marked_unsupported_without_the_simulation_feature() {
+        let message = "AgABA3Lgs31rdjnEG5FRyrm2uAi4f+erGdyJl0UtJyMMLGzC9wF+t3qhmhpj3vI369n5Ef5xRLms/Vn8J/Lc7bmoIkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMBafBISARibJ+I25KpHkjLe53ZrqQcLWGy8n97yWD7mAQICAQAMAgAAAADKmjsAAAAA";
+        let wrapper = SolanaTransactionWrapper::from_string(
+            &create_transaction_with_empty_signatures(message),
+        )
+        .expect("known transfer parses");
+        let options = VisualSignOptions {
+            include_intermediate_output: true,
+            decode_transfers: true,
+            metadata: Some(generated::parser::ChainMetadata {
+                metadata: Some(generated::parser::chain_metadata::Metadata::Solana(
+                    generated::parser::SolanaMetadata {
+                        network_id: None,
+                        idl: None,
+                        idl_mappings: Default::default(),
+                        simulated_transaction_result: Some(
+                            base64::engine::general_purpose::STANDARD.encode("{}"),
+                        ),
+                        max_fee_lamports: None,
+                    },
+                )),
+            }),
+            ..VisualSignOptions::default()
+        };
+        let result = SolanaVisualSignConverter
+            .to_visual_sign_payload(wrapper, options)
+            .expect("converts");
+        let decoded: SolanaIntermediateOutput =
+            borsh::from_slice(result.intermediate_output.as_deref().expect("emitted"))
+                .expect("decodes");
+        assert_eq!(
+            decoded.simulation_error,
+            Some(crate::intermediate::SolanaSimulationError::SimulationUnsupported)
+        );
+        assert!(decoded.simulated_instructions.is_empty());
+    }
+
     /// End-to-end exercise of the opt-in intermediate-output path: a known
     /// Solana System Program transfer is converted with
     /// `include_intermediate_output: true`, the emitted borsh bytes are decoded

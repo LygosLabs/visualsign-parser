@@ -15,10 +15,14 @@ rejected too, as is a transaction that repeats the compute unit price or limit,
 which the runtime rejects. The row is therefore a true upper bound on what the
 transaction pays. The CLI accepts the same value as `--max-fee-lamports`.
 
-The Solana intermediate output carries the cap in force as a trailing
-`max_fee_lamports` field, so a consumer that checks the transaction's fee
-reads the same number the signer saw. Its schema version is now 5; a decoder
-that asserts the version must update before it accepts the new output.
+The Solana intermediate output moves to schema version 5 with two additions.
+A `native_instruction_decoder` tag right after the version says which native
+decoding the build has, so a consumer can tell a build without `json-parsed`
+from a decode failure, and a build without `simulation` now marks a supplied
+simulation `SimulationUnsupported` instead of refusing the request. A trailing
+`max_fee_lamports` field carries the cap in force, so a consumer that checks
+the transaction's fee reads the same number the signer saw. A decoder that
+asserts the version must read both fields before it accepts the new output.
 
 The `max_fee_lamports` field is part of the Borsh-encoded `ChainMetadata`, so
 `metadata_digest` changes for every Solana request that sends `chain_metadata`,
