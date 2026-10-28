@@ -5,17 +5,15 @@ not generated for the tests. They come from a second, independent producer next 
 the Python-SDK vectors in `../../vectors/`.
 
 - Producer: `@nktkas/hyperliquid` 0.33.3 (JavaScript SDK) built the actions.
-- Signers: the Anchorage browser extension and an HSM build carrying the
-  self-hosted EIP-712 exception for the Hyperliquid L1 envelope, running as a
-  simulator with the published test seeds.
+- Signer: an EIP-712 wallet signing the typed data as given (`eth_signTypedData_v4`).
 - Posted to the Hyperliquid testnet API on 2026-10-26 between 14:10 and 14:13 UTC,
-  from the unfunded wallet `0xba66…e622`. The API answered "does not exist" for
-  that user, which shows it recovered the expected signer from each signature.
+  from an unfunded test wallet. The API answered "does not exist" for that user,
+  which shows it recovered the expected signer from each signature.
 - The `connectionId` of `a1-order` and `a2-cancel` was recomputed independently
   with Python msgpack 1.0.8 and pycryptodome keccak; both match.
 - `r1-remove-agent` and `t1-accept-terms` come from a later run on 2026-10-28, where the
   Hyperliquid testnet web app built the requests (its "Remove API Wallet" and terms
-  prompts) and the same signers signed them. Hyperliquid accepted both.
+  prompts) and the same kind of wallet signed them. Hyperliquid accepted both.
 
 | File | Kind |
 | --- | --- |
