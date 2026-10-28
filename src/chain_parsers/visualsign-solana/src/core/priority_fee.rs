@@ -30,6 +30,11 @@ fn is_signature_precompile(program_id: &Pubkey) -> bool {
         || solana_sdk_ids::secp256r1_program::check_id(program_id)
 }
 
+/// Decodes a compute-budget request as the runtime does: trailing bytes are ignored.
+pub fn decode_compute_budget_request(data: &[u8]) -> borsh::io::Result<ComputeBudgetInstruction> {
+    ComputeBudgetInstruction::deserialize(&mut &data[..])
+}
+
 const SOL_DECIMALS: u8 = 9;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -61,8 +66,8 @@ impl PriorityFee {
         }
     }
 
-    /// The requests in the compute-budget instructions, decoded as the visualizer decodes them.
-    /// One that does not decode leaves the fee unknown: a newer runtime may accept and charge it.
+    /// The requests in the compute-budget instructions, decoded as the runtime decodes them. One
+    /// that does not decode leaves the fee unknown; the runtime rejects such a transaction too.
     pub fn from_instructions(
         instructions: &[CompiledInstruction],
         static_account_keys: &[Pubkey],
@@ -75,13 +80,12 @@ impl PriorityFee {
             if !is_compute_budget {
                 continue;
             }
-            let request =
-                ComputeBudgetInstruction::try_from_slice(&instruction.data).map_err(|e| {
-                    VisualSignError::ValidationError(format!(
-                        "the fee this transaction commits to cannot be determined: compute \
-                         budget instruction {index} did not decode: {e}"
-                    ))
-                })?;
+            let request = decode_compute_budget_request(&instruction.data).map_err(|e| {
+                VisualSignError::ValidationError(format!(
+                    "the fee this transaction commits to cannot be determined: compute budget \
+                     instruction {index} did not decode: {e}"
+                ))
+            })?;
             fee.record(&request);
         }
         Ok(fee)
@@ -183,6 +187,11 @@ impl CommittedFee {
     pub fn lamports(self) -> u64 {
         self.base
             .saturating_add(self.priority.map_or(0, PriorityFeeEstimate::lamports))
+    }
+
+    /// The priority fee part, which the adopted summary hoists as its own row.
+    pub fn priority(self) -> Option<PriorityFeeEstimate> {
+        self.priority
     }
 
     /// Rejects a fee cap below the committed fee, so a "Max Fee" row is never lower than what
@@ -397,21 +406,37 @@ mod tests {
         );
     }
 
-    /// A trailing byte: a newer runtime may accept and charge the request; the parser cannot.
+    /// The runtime reads a request with `try_from_slice_unchecked`, so bytes after it are
+    /// ignored and the request is still charged.
+    #[test]
+    fn test_from_instructions_ignores_trailing_bytes_like_the_runtime() {
+        let keys = [solana_sdk_ids::compute_budget::id()];
+        let instructions = [compiled(0, vec![3, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0, 0xff])];
+        let fee = PriorityFee::from_instructions(&instructions, &keys).unwrap();
+        assert_eq!(
+            fee.estimate(),
+            Some(PriorityFeeEstimate::UpperBound(1_400_000))
+        );
+    }
+
+    /// Cut short or an unknown variant: the runtime rejects the transaction, the parser
+    /// cannot read the request, and the fee stays unknown.
     #[test]
     fn test_from_instructions_fails_closed_on_an_undecodable_request() {
         let keys = [solana_sdk_ids::compute_budget::id()];
-        let instructions = [compiled(0, vec![3, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0, 0xff])];
-        let Err(VisualSignError::ValidationError(message)) =
-            PriorityFee::from_instructions(&instructions, &keys)
-        else {
-            panic!("an undecodable request must leave the fee unknown");
-        };
-        assert!(
-            message.contains("compute budget instruction 0 did not decode"),
-            "{message}"
-        );
-        assert!(committed_fee(1, &instructions, &keys).is_err());
+        for data in [vec![3, 0x40, 0x42], vec![9]] {
+            let instructions = [compiled(0, data)];
+            let Err(VisualSignError::ValidationError(message)) =
+                PriorityFee::from_instructions(&instructions, &keys)
+            else {
+                panic!("an undecodable request must leave the fee unknown");
+            };
+            assert!(
+                message.contains("compute budget instruction 0 did not decode"),
+                "{message}"
+            );
+            assert!(committed_fee(1, &instructions, &keys).is_err());
+        }
     }
 
     #[test]

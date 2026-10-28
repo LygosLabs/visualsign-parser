@@ -22,10 +22,7 @@ that asserts the version must update before it accepts the new output.
 
 The `max_fee_lamports` field is part of the Borsh-encoded `ChainMetadata`, so
 `metadata_digest` changes for every Solana request that sends `chain_metadata`,
-even when the new field is absent. Deploy the parser first, then release the
-client that recomputes the digest with the trailing field in its Borsh mirror,
-and only then start sending the field; between the two deploys the client's
-digest check fails closed for Solana requests that carry `chain_metadata`. A
-payload signed before the deploy keeps the digest and the bytes it was created
-with, so it still verifies. To roll back, revert the client mirror and the
-parser together and stop sending the field first.
+even when the new field is absent. A client that recomputes the digest must add
+the trailing field to its Borsh mirror. The parser and that mirror can ship in
+either order, as long as both are live before the client sends Solana
+`chain_metadata`.
