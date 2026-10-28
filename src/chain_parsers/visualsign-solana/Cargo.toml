@@ -10,7 +10,9 @@ rust-version.workspace = true
 intents = ["dep:visualsign-intents"]
 default    = ["cli-plugin"]
 cli-plugin = ["dep:clap", "dep:parser_cli_core"]
-diagnostics = ["visualsign/diagnostics"]
+# Forwarded weakly to visualsign-intents: when `intents` is also on, its soft
+# findings (an expired deadline) render as Diagnostic fields, not Warning text.
+diagnostics = ["visualsign/diagnostics", "visualsign-intents?/diagnostics"]
 
 [dependencies]
 bs58            = "0.5"
