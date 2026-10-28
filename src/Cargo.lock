@@ -15119,6 +15119,7 @@ dependencies = [
  "solana-packet",
  "solana-parser-fuzz-core",
  "solana-program",
+ "solana-program-error 3.0.0",
  "solana-rpc-client-types",
  "solana-sdk",
  "solana-system-interface 1.0.0",
