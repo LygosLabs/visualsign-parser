@@ -1,0 +1,105 @@
+name: "Bitcoin PSBT: regtest"
+
+# Validates the Bitcoin PSBT parser against a live Bitcoin Core node, like the
+# Solana surfpool lane does against a mainnet fork. Runs automatically on PRs
+# that touch the Bitcoin crate, the core `visualsign` crate it renders through,
+# or this lane's own files, on any PR carrying the
+# `test:bitcoin-regtest` label, or by hand. The offline half (BIP vectors and
+# replayed mainnet transactions) runs in the normal `make test`.
+#
+# Path matching is done here rather than by adding the label from labeler.yml:
+# labels applied with GITHUB_TOKEN don't start new workflow runs, and on
+# `opened` this workflow reads the labels before the labeler has added them.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Decides whether the lane runs. Lists the PR's changed files through the API;
+  # no PR code is checked out.
+  gate:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          ADDED_LABEL: ${{ github.event.label.name }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          LANE_LABEL=test:bitcoin-regtest
+          LANE_PATHS='^(src/chain_parsers/visualsign-bitcoin/|src/visualsign/|\.github/workflows/bitcoin-regtest\.yml$|\.github/bitcoind\.env$|scripts/install-bitcoind\.sh$)'
+          decide() { echo "run=$1" >> "$GITHUB_OUTPUT"; echo "run=$1: $2"; exit 0; }
+
+          [[ "$EVENT" == workflow_dispatch ]] && decide true "manual dispatch"
+          # Any other label being added must not re-run the lane.
+          if [[ "$ACTION" == labeled ]]; then
+            [[ "$ADDED_LABEL" == "$LANE_LABEL" ]] && decide true "$LANE_LABEL added"
+            decide false "label $ADDED_LABEL added"
+          fi
+          jq -e --arg l "$LANE_LABEL" 'index($l)' <<<"$LABELS" >/dev/null && decide true "PR has $LANE_LABEL"
+          # Capture before matching: piping into `grep -q` would SIGPIPE `gh`
+          # and, under pipefail, read as "no match". Fail toward running. A
+          # rename lists its source as previous_filename: moving a watched file
+          # out of a watched path must still run the lane.
+          files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)')" \
+            || decide true "could not list changed files"
+          grep -qE "$LANE_PATHS" <<<"$files" && decide true "PR touches the Bitcoin crate or this lane"
+          decide false "no Bitcoin changes and no $LANE_LABEL label"
+
+  regtest:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    # On the job, not the workflow: a run whose gate decides false (say, an
+    # unrelated label) must not cancel a regtest run already in progress. A
+    # new push that does run the lane supersedes the older one.
+    concurrency:
+      group: bitcoin-regtest-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest-4-cores
+    timeout-minutes: 45
+    steps:
+      - name: git checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+      - name: Cache Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src/target/
+          key: ${{ runner.os }}-cargo-bitcoin-regtest-${{ hashFiles('src/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bitcoin-regtest-
+      - name: Install Bitcoin Core
+        run: scripts/install-bitcoind.sh
+      - name: Offline vectors (BIP-174/370/371, mainnet replays)
+        working-directory: src
+        run: cargo test --locked -p visualsign-bitcoin --test vectors_test --test mainnet_test
+      - name: Regtest lane
+        working-directory: src
+        run: |
+          BITCOIND="$(command -v bitcoind)" BITCOIN_CLI="$(command -v bitcoin-cli)" \
+            cargo test --locked -p visualsign-bitcoin --test regtest -- --ignored --nocapture

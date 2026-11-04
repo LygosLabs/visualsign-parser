@@ -15,6 +15,7 @@ members = [
   "parser/grpc-server",
   "parser/http-server",
   "visualsign",
+  "visualsign-intents",
   "chain_parsers/visualsign-bitcoin",
   "chain_parsers/visualsign-bitcoin-owned",
   "chain_parsers/visualsign-ethereum",
@@ -23,6 +24,7 @@ members = [
   "chain_parsers/visualsign-sui",
   "chain_parsers/visualsign-tron",
   "chain_parsers/visualsign-unspecified",
+  "chain_parsers/visualsign-zcash",
   "solana_test_utils",
   "tools/idl-meta",
 ]

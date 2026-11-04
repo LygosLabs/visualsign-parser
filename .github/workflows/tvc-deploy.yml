@@ -74,17 +74,29 @@ permissions:
 jobs:
   deploy:
     # Manual dispatch, or the `tvc-deploy-test` label on a PR (test app only).
+    # Needs this repo's TVC secrets and vars, so it never runs in a fork (a
+    # fork deploys with `tools/tvc-deploy` against its own Turnkey org, see
+    # docs/wallet-integration/self-hosted-tee/getting-started.mdx) or on a
+    # fork PR here (no secrets are passed to it).
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'tvc-deploy-test'
+      github.repository_owner == 'anchorageoss' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event.label.name == 'tvc-deploy-test' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        )
+      )
     runs-on: ubuntu-26.04
     # Bounded: cargo install tvc (~minutes) + poll-to-healthy (up to 15m) + smoke.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@fb51252c7ba57d633bc668f941da052e410add48 # v1.13.0
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
 
       - name: Install tvc CLI
         run: cargo install tvc --version 0.7.0 --locked
@@ -184,7 +196,7 @@ jobs:
           # Pin the approved turnkey-client version (input -> repo var -> latest).
           VSP_SMOKE_CLIENT_VERSION: ${{ inputs.turnkey_client_version || vars.TVC_SMOKE_CLIENT_VERSION || 'latest' }}
         run: |
-          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           umask 077
           mkdir -p "$HOME/.config/turnkey/keys"
           printf '%s' "$TVC_API_KEY_PUBLIC"       > "$HOME/.config/turnkey/keys/dev.public"

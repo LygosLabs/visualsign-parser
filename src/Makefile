@@ -24,7 +24,7 @@ PARSER_APP_CHAINS := $(sort $(patsubst visualsign-%,%,$(notdir $(wildcard chain_
 # derived from chain_parsers/* -- parser_cli only wires up chains that have a
 # ChainPlugin registered (see parser/cli/src/), which sui and unspecified
 # don't yet, so a subset is the actual rule and a literal list says so.
-PARSER_CLI_CHAINS := bitcoin ethereum near solana tron
+PARSER_CLI_CHAINS := bitcoin ethereum near solana tron zcash
 
 .PHONY: all
 all: generated
@@ -51,9 +51,17 @@ test: build
 	cargo test --no-fail-fast -p visualsign-solana --no-default-features --lib
 	@# diagnostics ON: parser_cli + lib tests gated behind the feature.
 	cargo test --no-fail-fast -p parser_cli --all-targets
+	@# zcash is not a default feature, but visualsign-zcash is consumed as a
+	@# library elsewhere; run the CLI's zcash fixtures with every chain on.
+	cargo test --no-fail-fast -p parser_cli --features zcash --all-targets
+	@# parser_app registers zcash only with the feature on; run its registry test.
+	cargo test --no-fail-fast -p parser_app --features zcash --all-targets
 	cargo test --no-fail-fast -p visualsign --features diagnostics --lib
 	cargo test --no-fail-fast -p parser_cli_core --features diagnostics --lib
 	cargo test --no-fail-fast -p visualsign-near --features diagnostics --lib
+	@# dev-signing ON: the CLI token-metadata tests, whose signing helper moved to
+	@# visualsign-intents and so is out of reach of this crate's cfg(test).
+	cargo test --no-fail-fast -p visualsign-near --features dev-signing --lib
 	cargo test --no-fail-fast -p visualsign-solana --features diagnostics --lib
 
 # Solana preset sources, which `cargo fmt` cannot reach. `presets/mod.rs`
@@ -95,15 +103,51 @@ fmt-check: check-preset-sources
 unused-deps:
 	cargo machete . ../tools/tvc-deploy
 
+# shellcheck, pinned by digest. `lint-shell` always runs this image, locally
+# and in CI, so both apply the same rule set and nothing is installed on the
+# host. A `shellcheck` on PATH is never picked up implicitly: it may be a
+# different release. SHELLCHECK=shellcheck opts into it explicitly.
+SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+SHELLCHECK ?= docker run --rm --network none -v "$(ROOT)":/mnt:ro -w /mnt $(SHELLCHECK_IMAGE)
+
+.PHONY: lint-shell
+# Every tracked `*.sh`, plus tracked files whose first line is an sh/bash/dash/ksh
+# shebang (shellcheck does not support zsh). Paths are relative to the repo
+# root, which is also the container's working directory.
+lint-shell:
+	@cd "$(ROOT)" && list=$$(mktemp) && trap 'rm -f "$$list"' EXIT && \
+	{ git ls-files -z '*.sh'; \
+		git grep -z -lI -E '^#!' | xargs -0 sh -c 'for f; do \
+			head -n 1 -- "$$f" | grep -qE "^#!.*[/ ](ba|da|k)?sh([[:space:]]|$$)" && printf "%s\0" "$$f"; \
+		done' sh; } | sort -zu > "$$list"; \
+	n=$$(tr -cd '\000' < "$$list" | wc -c | tr -d ' '); \
+	test "$$n" -gt 0 || { echo "no shell scripts found"; exit 1; }; \
+	$(SHELLCHECK) --version | sed -n 2p; \
+	echo "shellcheck $$n scripts"; \
+	xargs -0 $(SHELLCHECK) < "$$list"
+
 .PHONY: lint
-lint: fmt-check
+lint: fmt-check lint-shell
 	cargo clippy --version
 	cargo clippy --workspace --exclude parser_cli --all-targets -- -D warnings
 	cargo clippy -p parser_cli --all-targets -- -D warnings
+	cargo clippy -p parser_cli --features zcash --all-targets -- -D warnings
 	cargo clippy -p visualsign --features diagnostics --lib -- -D warnings
 	cargo clippy -p parser_cli_core --features diagnostics --lib -- -D warnings
 	cargo clippy -p visualsign-near --features diagnostics --lib -- -D warnings
 	cargo clippy -p visualsign-solana --features diagnostics --lib -- -D warnings
+
+# Library crates that must build for Apple Silicon (iOS device) with no
+# C/C++/asm in the dependency tree. Add a chain here once its crate passes.
+APPLE_NO_C_CRATES := visualsign visualsign-ethereum visualsign-tron visualsign-unspecified
+
+.PHONY: apple-silicon-check
+apple-silicon-check:
+	@# Any build script that compiles C calls the C compiler; pointing it at
+	@# `false` turns a C dependency into a build failure. Run on an Apple
+	@# Silicon macOS host (CI: macos-latest), which also runs the tests natively.
+	CC=/usr/bin/false CXX=/usr/bin/false cargo build --lib --target aarch64-apple-ios $(addprefix -p ,$(APPLE_NO_C_CRATES))
+	cargo test --no-fail-fast $(addprefix -p ,$(APPLE_NO_C_CRATES))
 
 .PHONY: narrow-build-check
 narrow-build-check:
