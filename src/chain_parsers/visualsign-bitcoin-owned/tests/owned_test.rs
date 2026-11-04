@@ -524,11 +524,25 @@ fn vault_withdrawal_refuses_an_unlabelled_bare_output_and_none_shows_it_raw() {
 
 #[test]
 fn claimed_vault_input_is_never_labelled() {
-    let json = run_case(&CASES[6]);
-    assert!(!json.contains("Your vault #0"), "{json}");
-    assert!(json.contains(&vault0().to_hex_string()), "{json}");
-    assert!(json.contains("claimed by witness_utxo only"), "{json}");
+    // A vault is not a witness program, so the parser's BIP-174 checks refuse
+    // a vault input carried by witness_utxo alone, before any label applies.
+    assert_eq!(run_case(&CASES[6]), "refused: psbt-rejected");
     assert_eq!(run_case(&CASES[7]), "refused: unverified-input");
+    // The only claimed bare script the parser lets through: a version 0
+    // witness program of a length other than 20 or 32 bytes. Owned or not,
+    // it is never labelled when only claimed.
+    let script = ScriptBuf::from_bytes([&[0x00, 21][..], &[7u8; 21]].concat());
+    let mut p = claimed_vault_input();
+    p.inputs[0].witness_utxo.as_mut().unwrap().script_pubkey = script.clone();
+    let json = run(
+        &psbt_hex(&p),
+        vec![entry(&script, "Your vault #0")],
+        Policy::None,
+        Network::Regtest,
+    );
+    assert!(!json.contains("Your vault #0"), "{json}");
+    assert!(json.contains(&script.to_hex_string()), "{json}");
+    assert!(json.contains("claimed by witness_utxo only"), "{json}");
 }
 
 #[test]

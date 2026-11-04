@@ -1316,11 +1316,35 @@ fn recognizer_names_a_verified_bare_input() {
 }
 
 #[test]
-fn recognizer_is_told_a_witness_utxo_script_is_only_claimed() {
+fn recognizer_is_never_asked_about_a_witness_utxo_non_witness_script() {
+    // The BIP-174 input checks refuse a witness_utxo-only input whose spent
+    // script is not a witness program, before any recognizer runs.
     let script = bare_multisig_script();
     let mut p = bare_script_input();
     let prev = p.inputs[0].non_witness_utxo.take().unwrap();
     p.inputs[0].witness_utxo = Some(prev.output[0].clone());
+    let r = Arc::new(Recorder::new(script, "Toy bare script"));
+    let err = json_with(&p, vec![r.clone()]).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("witness_utxo given for a non-witness input"),
+        "{err}"
+    );
+    assert!(r.calls().is_empty());
+}
+
+#[test]
+fn recognizer_is_told_a_witness_utxo_script_is_only_claimed() {
+    // The one claimed spent script with no address form that the BIP-174
+    // checks let through: a version 0 witness program of a length other than
+    // 20 or 32 bytes (unspendable under BIP-141).
+    let script = ScriptBuf::from_bytes([&[0x00, 21][..], &[7u8; 21]].concat());
+    assert!(script.is_witness_program());
+    assert!(Address::from_script(&script, Network::Bitcoin).is_err());
+    let mut p = bare_script_input();
+    let mut prevout = p.inputs[0].non_witness_utxo.take().unwrap().output[0].clone();
+    prevout.script_pubkey = script.clone();
+    p.inputs[0].witness_utxo = Some(prevout);
     let r = Arc::new(Recorder::new(script.clone(), "Toy bare script"));
     let json = json_with(&p, vec![r.clone()]).unwrap();
     assert_eq!(

@@ -64,6 +64,12 @@ pub enum ScriptSource {
     VerifiedPrevout,
     /// The output an input spends, taken from `witness_utxo` only. Nothing
     /// binds it to the real prevout, so it is a claim.
+    ///
+    /// Recognizers run after the BIP-174 input checks, which refuse a
+    /// `witness_utxo`-only input whose spent script is not a witness program.
+    /// So the only claimed scripts that reach a recognizer are witness
+    /// programs with no address form: a version 0 program whose length is
+    /// neither 20 nor 32 bytes, which BIP-141 makes unspendable.
     ClaimedPrevout,
 }
 
@@ -161,7 +167,6 @@ fn check_text(what: &str, text: &str) -> Result<(), BitcoinParserError> {
     Ok(())
 }
 
-/// `label` with surrounding spaces removed and ASCII letters lowered.
 /// `label`'s ASCII letters and digits, lowered: what a reader compares.
 fn label_key(label: &str) -> String {
     label
