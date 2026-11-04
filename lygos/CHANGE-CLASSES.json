@@ -1,0 +1,333 @@
+{
+  "version": 1,
+  "about": "Class of every Lygos change on top of anchorageoss/visualsign-parser. FORK-PATCHES.json is append-only (lygos/check-fork-patches.mjs), so its upstreamCandidate flags cannot be corrected in place; this file records the class instead and does not replace the manifest. A = generic, upstream-ready. B = ours, upstreamable only behind caller configuration. C = Lygos-only, belongs in our wrapper. D = build, packaging, wasm glue, our checks.",
+  "source": "/Users/francis/quantum-ops/audit/post-freeze/reviews/VISUALSIGN-FORK-DIFFERENCES.md, sections 1 and 2",
+  "upstream": {
+    "repository": "https://github.com/anchorageoss/visualsign-parser",
+    "forkBase": "5d18e229d65d4015865ea71dbe22b85578bc4c74",
+    "syncedTo": "64b3d79221126646e558b3e1356bfd1544d76773"
+  },
+  "upstreamRoutes": {
+    "pr/regen-fixtures-must-fail": {
+      "class": "A",
+      "from": [
+        "8b4d909a"
+      ],
+      "status": "local branch, not pushed, not opened (CLA unsigned; owner OK needed)"
+    },
+    "pr/bare-input-script": {
+      "class": "A",
+      "from": [
+        "3f4159d9 (A part only)"
+      ],
+      "status": "local branch, not pushed, not opened (CLA unsigned; owner OK needed)"
+    },
+    "RFC #645 / issue #640": {
+      "class": "B",
+      "from": [
+        "3f4159d9 (B part)",
+        "459bf6b2",
+        "9086b12a",
+        "b56976d6"
+      ],
+      "status": "comment drafted, not posted"
+    }
+  },
+  "commits": [
+    {
+      "commit": "3f4159d93fe71f1151f68fcaf12276f0a3cfad3e",
+      "subject": "feat(bitcoin): show bare input scripts and let callers name bare scripts",
+      "forkPatchesEntry": 1,
+      "forkPatchesUpstreamCandidate": true,
+      "class": "A+B",
+      "parts": [
+        {
+          "part": "show a bare input's spent script",
+          "class": "A",
+          "reason": "Any wallet benefits: an input spending a script with no address form showed no script at all.",
+          "route": "PR branch pr/bare-input-script (rebuilt from upstream main)"
+        },
+        {
+          "part": "ScriptRecognizer hook (with_recognizers, ScriptSource, Recognized Script rows)",
+          "class": "B",
+          "reason": "Generic seam, off by default, but it needs Anchorage to accept caller configuration; RFC #645 may want it as signed metadata instead.",
+          "route": "after the RFC #645 / issue #640 conversation"
+        }
+      ],
+      "forkPatchesFlagCorrect": false,
+      "flagNote": "One boolean for two changes: the A part is upstream-ready, the B part is conditional."
+    },
+    {
+      "commit": "ef8226da4db9b85822a7fdebf8cfeb2c0320b737",
+      "subject": "feat(bitcoin-owned): label owned bare scripts by exact bytes",
+      "forkPatchesEntry": 2,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "C",
+      "reason": "The owned crate: exact-bytes labels in our wording (\"Your vault #N\") for our vault scripts.",
+      "route": "stays in our wrapper",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "413328f1a24bc3281a9d5a915b1bb160b331181c",
+      "subject": "feat(display-core): one WebAssembly export for the Bitcoin display",
+      "forkPatchesEntry": 3,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "The display-core WebAssembly export for the wallet; nothing upstream calls it.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "3da121596cc9a029a5ac90030abb4d7f8fd1f85c",
+      "subject": "fix(bitcoin-owned): labels must start with \"Your \"",
+      "forkPatchesEntry": 4,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "C",
+      "reason": "Our label wording rule (\"Your \" prefix); superseded by fc9a47f6.",
+      "route": "stays in our wrapper",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "895a81aa08bee39fa8cae40f68079ccd56e5ad7b",
+      "subject": "fix(display-core): move out of the upstream workspace",
+      "forkPatchesEntry": 5,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "Moves display-core out of the upstream workspace.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "abccbf766c2ccd96525c70daf1d62579391c50e7",
+      "subject": "fix(display-core): put the engine identity in the digest",
+      "forkPatchesEntry": 6,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "Engine identity in the wallet digest: a wallet contract.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "459bf6b269dfb16f02263f71b6f3eb0291edb249",
+      "subject": "refactor(bitcoin): own Send + Sync recognizers on the converter",
+      "forkPatchesEntry": 7,
+      "forkPatchesUpstreamCandidate": true,
+      "class": "B",
+      "reason": "Recognizers owned as Arc<dyn ScriptRecognizer + Send + Sync> on the converter; only useful with the hook, and drops Copy from BitcoinVisualSignConverter.",
+      "route": "with the hook, after RFC #645",
+      "forkPatchesFlagCorrect": false,
+      "flagNote": "Flagged upstreamCandidate true, but it is B: upstreamable only with the recognizer hook, which needs Anchorage to accept caller configuration."
+    },
+    {
+      "commit": "8b4d909a8de704239e4d917a875d4a8e8932ed44",
+      "subject": "test(bitcoin): a REGEN_FIXTURES run can never pass as a check",
+      "forkPatchesEntry": 8,
+      "forkPatchesUpstreamCandidate": true,
+      "class": "A",
+      "reason": "Test-harness fix any maintainer wants: a stray REGEN_FIXTURES must not turn golden checks into passing rewrites.",
+      "route": "PR branch pr/regen-fixtures-must-fail",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "472940ada37ade070ddd130da27d491ba70b2733",
+      "subject": "fix(bitcoin-owned): bare owned scripts, stricter labels, owned hook",
+      "forkPatchesEntry": 9,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "C",
+      "reason": "Owned scripts must be bare, stricter labels, the owned hook: our policy.",
+      "route": "stays in our wrapper",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "c97da763b571534459d408b5c1b723f773e6adba",
+      "subject": "fix(bitcoin-owned): vault withdrawal renders only signed or verified data",
+      "forkPatchesEntry": 10,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "C",
+      "reason": "Policy::VaultWithdrawal is our vault rule set; its strict signed-or-verified input mode is a B-shaped idea to raise in the RFC thread, not a PR.",
+      "route": "stays in our wrapper; idea offered in RFC #645",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "9bfa89fa54eafa9840ec70acc5a3020c4a46b687",
+      "subject": "fix(display-core): same wasm bytes from any checkout path",
+      "forkPatchesEntry": 11,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "Reproducible wasm bytes from any checkout path.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "8a91389cc182bd2a6c82fd1738733ebb60d5deaa",
+      "subject": "chore(lygos): checks that fail loudly, and the wallet's rules",
+      "forkPatchesEntry": 12,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "Our check script; adds WALLET-RULES.md, a class C document.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "9086b12a8a2205e4622ab8495d6b2f2bc49d5152",
+      "subject": "fix(bitcoin): recognizer rows cannot pass for parser rows",
+      "forkPatchesEntry": 13,
+      "forkPatchesUpstreamCandidate": true,
+      "class": "B",
+      "reason": "Recognizer row labels cannot pass for parser labels; only meaningful once the hook exists.",
+      "route": "with the hook, after RFC #645",
+      "forkPatchesFlagCorrect": false,
+      "flagNote": "Flagged upstreamCandidate true, but it is B: upstreamable only with the recognizer hook, which needs Anchorage to accept caller configuration."
+    },
+    {
+      "commit": "fc9a47f6696bbfe8abd629e4eec3bbc9d22b3514",
+      "subject": "fix(bitcoin-owned): labels are a closed pattern; test the witness-program refusal",
+      "forkPatchesEntry": 14,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "C",
+      "reason": "Closed label pattern ^Your (new )?vault #[0-9]{1,4}$ and the witness-program refusal: ours.",
+      "route": "stays in our wrapper",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "6055641c42de208293a79ccba5ad17e332faef8f",
+      "subject": "fix(display-core): pin the wasm hash and the tools that build it",
+      "forkPatchesEntry": 15,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "Pins the wasm hash and the build tools.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "745846b2f6cb0285efe7084d57ca52a1c4f2d51a",
+      "subject": "chore(lygos): check-all pins tests, the wasm hash, patches and linked chains",
+      "forkPatchesEntry": 16,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "check-all pins tests, wasm hash, patches, linked chains.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "57a00c638be9bef7796c507b594f1be0a348177f",
+      "subject": "chore(lygos): add FORK-PATCHES.json",
+      "forkPatchesEntry": null,
+      "forkPatchesUpstreamCandidate": null,
+      "class": "D",
+      "reason": "Manifest only (adds FORK-PATCHES.json).",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": null,
+      "flagNote": "Not listed: commits that change only lygos/FORK-PATCHES.json are excluded by the manifest's own rule."
+    },
+    {
+      "commit": "f44798ddcd0cee8ab893e95da23abaeab9874fdd",
+      "subject": "fix(lygos): check-all keeps the reproducibility build logs",
+      "forkPatchesEntry": 17,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "check-all keeps reproducibility build logs.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "11af7acf367bd90c377752895d504b69418a5f47",
+      "subject": "chore(lygos): list f44798d in FORK-PATCHES.json",
+      "forkPatchesEntry": null,
+      "forkPatchesUpstreamCandidate": null,
+      "class": "D",
+      "reason": "Manifest only.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": null,
+      "flagNote": "Not listed: commits that change only lygos/FORK-PATCHES.json are excluded by the manifest's own rule."
+    },
+    {
+      "commit": "b56976d633d9bf7f92e429d9a7244f5981cc3ec9",
+      "subject": "test(bitcoin): pin the 4-character abbreviation limit",
+      "forkPatchesEntry": 18,
+      "forkPatchesUpstreamCandidate": true,
+      "class": "B",
+      "reason": "A test pinning the 4-character abbreviation limit of the hook's label check (9086b12a).",
+      "route": "with the hook, after RFC #645",
+      "forkPatchesFlagCorrect": false,
+      "flagNote": "Flagged upstreamCandidate true, but it is B: upstreamable only with the recognizer hook, which needs Anchorage to accept caller configuration."
+    },
+    {
+      "commit": "481ad3bc0c44e2dd5f0594d429f6e61818a143c9",
+      "subject": "fix(lygos): checks that cannot be moved, drift that cannot pass",
+      "forkPatchesEntry": 19,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "Our checks cannot be moved; drift cannot pass.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "2c5c6c2a00b256017bebc9bce556fad6ecb52ee3",
+      "subject": "chore(lygos): list b56976d and 481ad3b in FORK-PATCHES.json",
+      "forkPatchesEntry": null,
+      "forkPatchesUpstreamCandidate": null,
+      "class": "D",
+      "reason": "Manifest only.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": null,
+      "flagNote": "Not listed: commits that change only lygos/FORK-PATCHES.json are excluded by the manifest's own rule."
+    },
+    {
+      "commit": "095a6ef163891badf1dadec1c8fcd32cff173f4e",
+      "subject": "fix(display-core): the build directory exists only during a build",
+      "forkPatchesEntry": 20,
+      "forkPatchesUpstreamCandidate": false,
+      "class": "D",
+      "reason": "display-core build directory exists only during a build.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": true
+    },
+    {
+      "commit": "2e73db164965bd3cf879f80f24101901a76bc72f",
+      "subject": "chore(lygos): list 095a6ef in FORK-PATCHES.json",
+      "forkPatchesEntry": null,
+      "forkPatchesUpstreamCandidate": null,
+      "class": "D",
+      "reason": "Manifest only; the commit the wallet pins.",
+      "route": "stays ours",
+      "forkPatchesFlagCorrect": null,
+      "flagNote": "Not listed: commits that change only lygos/FORK-PATCHES.json are excluded by the manifest's own rule."
+    }
+  ],
+  "syncBranchCommits": [
+    {
+      "commit": "2ff449ff627030d63da2bded4cd623166d2fce1c",
+      "subject": "Merge upstream main 64b3d79 into lygos/upstream-sync",
+      "class": "D",
+      "reason": "Merge of upstream main 64b3d792; src/Cargo.toml keeps upstream members and adds visualsign-bitcoin-owned.",
+      "route": "stays ours"
+    },
+    {
+      "commit": "f2387bd5fc965d2fa29b908045e8f09342801ded",
+      "subject": "test(bitcoin): pin 26 literal label sites after upstream #600",
+      "class": "B",
+      "reason": "Label-site pin of the hook's reserved-label test moves 25 to 26 because #600 added a literal Fee site.",
+      "route": "folds into the hook PR"
+    },
+    {
+      "commit": "888a0dcf8e3aad455610c34bbfb0d0469f472fe0",
+      "subject": "fix(bitcoin): recognizers sit behind the BIP-174 input checks",
+      "class": "B+C",
+      "parts": [
+        {
+          "part": "visualsign-bitcoin: ScriptSource::ClaimedPrevout reach documented, recognizer tests adapted to #600, stale doc line removed",
+          "class": "B",
+          "reason": "Recognizer code and tests: folds into the hook PR.",
+          "route": "with the hook, after RFC #645"
+        },
+        {
+          "part": "visualsign-bitcoin-owned: claimed-vault test and golden expect the parser refusal",
+          "class": "C",
+          "reason": "Our owned crate.",
+          "route": "stays in our wrapper"
+        }
+      ]
+    }
+  ]
+}
