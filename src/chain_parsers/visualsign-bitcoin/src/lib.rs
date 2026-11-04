@@ -453,6 +453,8 @@ mod tests {
     }
 
     /// Label call sites in lib.rs, pinned so none can stop being checked.
-    const LITERAL_SITES: usize = 25;
+    /// 26 since upstream #600 added the `Fee::SignatureBound` row, a second
+    /// literal "Fee" site; "Fee" was already reserved.
+    const LITERAL_SITES: usize = 26;
     const NUMBERED_SITES: usize = 3;
 }
