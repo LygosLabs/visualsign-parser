@@ -295,6 +295,23 @@
         "src/chain_parsers/visualsign-bitcoin/src/scripts.rs"
       ],
       "reason": "Wallet payment policy and owned change labels; wrapper-specific policy, pending native tests and the reviewed 0.2.0 build."
+    },
+    {
+      "commit": "2171add8f1fed06ee2f6686298518b8cfdc632ab",
+      "subject": "Scope address recognition to owned wallet payment change",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/CHANGE-CLASSES.json",
+        "lygos/check-all.sh",
+        "lygos/display-core/src/lib.rs",
+        "lygos/display-core/tests/display_test.rs",
+        "src/chain_parsers/visualsign-bitcoin-owned/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/owned_test.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/analysis.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/scripts.rs"
+      ],
+      "reason": "Restrict address recognition to owned standard change outputs under wallet-payment, retain existing bare-script contracts, correct engine identity test and formatting, and record the full upgrade from shipped source."
     }
   ]
 }
