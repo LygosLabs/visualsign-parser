@@ -276,6 +276,25 @@
         "lygos/display-core/scripts/build-root.sh"
       ],
       "reason": "Ours: the fixed build directory is created per build by the building user (mode 700) and removed afterwards; other users wait their turn, so no administrator or world-writable directory is needed."
+    },
+    {
+      "commit": "4dad8d2984181124b2f3491daae4b889b5671623",
+      "subject": "Add wallet payment policy and address-preserving change labels",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/check-all.sh",
+        "lygos/display-core/Cargo.lock",
+        "lygos/display-core/Cargo.toml",
+        "lygos/display-core/WALLET-RULES.md",
+        "lygos/display-core/scripts/run-goldens.mjs",
+        "lygos/display-core/src/lib.rs",
+        "lygos/display-core/tests/display_test.rs",
+        "src/chain_parsers/visualsign-bitcoin-owned/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/owned_test.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/analysis.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/scripts.rs"
+      ],
+      "reason": "Wallet payment policy and owned change labels; wrapper-specific policy, pending native tests and the reviewed 0.2.0 build."
     }
   ]
 }
