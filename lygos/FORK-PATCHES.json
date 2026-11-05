@@ -5,7 +5,7 @@
     "baseCommit": "5d18e229d65d4015865ea71dbe22b85578bc4c74",
     "baseSubject": "feat(bitcoin): add PSBT parser crate (#577)"
   },
-  "notes": "One entry per commit on top of the upstream base, in order. Commits that change only this file are not listed. lygos/check-fork-patches.mjs (run by lygos/check-all.sh) checks it against git log.",
+  "notes": "One entry per commit on top of the upstream base, in order. Commits that change only this file are not listed. lygos/check-fork-patches.mjs (run by lygos/check-all.sh) checks it against git log. Upstream sync points are recorded separately and append-only, checked against reviewed anchors in the checker. Patch entries use registration order, allowing historical omissions to be appended without rewriting old entries.",
   "patches": [
     {
       "commit": "3f4159d93fe71f1151f68fcaf12276f0a3cfad3e",
@@ -341,6 +341,60 @@
         "lygos/display-core/WASM-SHA256"
       ],
       "reason": "Record the reproduced 0.2.0 wasm hash and the formatting and linked-crate follow-ups."
+    },
+    {
+      "commit": "2ff449ff627030d63da2bded4cd623166d2fce1c",
+      "subject": "Merge upstream main 64b3d79 into lygos/upstream-sync",
+      "upstreamCandidate": false,
+      "files": [
+        "docs/chains/bitcoin.mdx",
+        "src/Cargo.lock",
+        "src/Cargo.toml",
+        "src/chain_parsers/visualsign-bitcoin/src/analysis.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/lib.rs",
+        "src/chain_parsers/visualsign-bitcoin/tests/lib_test.rs"
+      ],
+      "reason": "Record upstream integration and its Lygos merge resolutions."
+    },
+    {
+      "commit": "f2387bd5fc965d2fa29b908045e8f09342801ded",
+      "subject": "test(bitcoin): pin 26 literal label sites after upstream #600",
+      "upstreamCandidate": false,
+      "files": [
+        "src/chain_parsers/visualsign-bitcoin/src/lib.rs"
+      ],
+      "reason": "Update the reserved label-site test after upstream added a Fee label."
+    },
+    {
+      "commit": "888a0dcf8e3aad455610c34bbfb0d0469f472fe0",
+      "subject": "fix(bitcoin): recognizers sit behind the BIP-174 input checks",
+      "upstreamCandidate": false,
+      "files": [
+        "docs/chains/bitcoin.mdx",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/fixtures/qsb-synthetic-claimed-vault-input-none.expected",
+        "src/chain_parsers/visualsign-bitcoin-owned/tests/owned_test.rs",
+        "src/chain_parsers/visualsign-bitcoin/src/scripts.rs",
+        "src/chain_parsers/visualsign-bitcoin/tests/lib_test.rs"
+      ],
+      "reason": "Adapt recognizer contracts and owned input refusals to upstream validation."
+    },
+    {
+      "commit": "43cbee38bb3b8e104ac3e9e0627bdfa78be48ac1",
+      "subject": "chore(lygos): record the A/B/C/D class of every fork change",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/CHANGE-CLASSES.json"
+      ],
+      "reason": "Record the classification and review routes of all fork changes."
+    }
+  ],
+  "upstreamSyncs": [
+    {
+      "repository": "https://github.com/anchorageoss/visualsign-parser",
+      "commit": "64b3d79221126646e558b3e1356bfd1544d76773",
+      "mergeCommit": "2ff449ff627030d63da2bded4cd623166d2fce1c",
+      "subject": "ci: add make lint-shell (shellcheck) (#642)",
+      "reason": "Upstream main imported by the recorded two-parent merge; only its reachable commits are excluded. The merge and all Lygos changes remain listed."
     }
   ]
 }

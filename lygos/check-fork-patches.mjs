@@ -1,6 +1,8 @@
-// Fails unless lygos/FORK-PATCHES.json lists, in order, every commit on top
+// Fails unless lygos/FORK-PATCHES.json lists every Lygos commit on top
 // of the upstream base pinned BELOW (not the one the manifest names), each
-// with its exact files and subject. Commits that change only
+// with its exact files and subject. Reviewed upstream ancestry is excluded.
+// Entries remain in registration order so historical omissions can be appended.
+// Commits that change only
 // lygos/FORK-PATCHES.json (manifest updates) are not listed. Upstream-candidate
 // commits may touch only the upstream Bitcoin crate and its doc page.
 //
@@ -20,6 +22,12 @@ const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: 
 const MANIFEST = "lygos/FORK-PATCHES.json";
 const UPSTREAM_REPOSITORY = "https://github.com/anchorageoss/visualsign-parser";
 const UPSTREAM_BASE = "5d18e229d65d4015865ea71dbe22b85578bc4c74";
+// Immutable reviewed trust anchors, independent of manifest claims or mutable refs.
+// Adding an upstream sync requires review of this checker as well as the manifest.
+const UPSTREAM_SYNCS = [{
+  commit: "64b3d79221126646e558b3e1356bfd1544d76773",
+  mergeCommit: "2ff449ff627030d63da2bded4cd623166d2fce1c",
+}];
 const UPSTREAM_PATHS = ["src/chain_parsers/visualsign-bitcoin/", "docs/chains/bitcoin.mdx"];
 
 let failures = 0;
@@ -36,10 +44,35 @@ if (git("log", "-1", "--format=%s", UPSTREAM_BASE) !== up.baseSubject) fail("ups
 
 const files = (sha) => git("show", "--format=", "--name-only", sha).split("\n").filter(Boolean).sort();
 const commits = git("log", "--reverse", "--format=%H", `${UPSTREAM_BASE}..HEAD`).split("\n").filter(Boolean);
-const listed = commits.filter((sha) => JSON.stringify(files(sha)) !== JSON.stringify([MANIFEST]));
+const syncs = m.upstreamSyncs ?? [];
+const upstreamCommits = new Set();
+if (!Array.isArray(syncs)) { fail("upstreamSyncs must be an array"); process.exit(1); }
+if (syncs.length !== UPSTREAM_SYNCS.length) fail("upstream sync points differ from reviewed anchors");
+for (const [i, sync] of syncs.entries()) {
+  const anchor = UPSTREAM_SYNCS[i];
+  if (!anchor || sync.commit !== anchor.commit || sync.mergeCommit !== anchor.mergeCommit ||
+      sync.repository !== UPSTREAM_REPOSITORY) {
+    fail(`upstream sync ${i} is not a reviewed upstream point`);
+    continue;
+  }
+  try {
+    git("merge-base", "--is-ancestor", UPSTREAM_BASE, sync.commit);
+    git("merge-base", "--is-ancestor", sync.mergeCommit, "HEAD");
+    const parents = git("show", "-s", "--format=%P", sync.mergeCommit).split(" ");
+    if (parents.length !== 2 || parents[1] !== sync.commit) throw new Error("not the upstream merge parent");
+    if (git("log", "-1", "--format=%s", sync.commit) !== sync.subject) throw new Error("subject differs");
+    for (const sha of git("rev-list", `${UPSTREAM_BASE}..${sync.commit}`).split("\n").filter(Boolean)) {
+      upstreamCommits.add(sha);
+    }
+  } catch (e) { fail(`upstream sync ${i} cannot be verified: ${e.message}`); }
+}
+const manifestOnly = commits.filter((sha) => !upstreamCommits.has(sha) &&
+  JSON.stringify(files(sha)) === JSON.stringify([MANIFEST]));
+const listed = commits.filter((sha) => !upstreamCommits.has(sha) && !manifestOnly.includes(sha));
 const patches = m.patches ?? [];
-if (JSON.stringify(patches.map((p) => p.commit)) !== JSON.stringify(listed)) {
-  fail(`manifest lists ${patches.length} commits, git has ${listed.length} on top of the base (manifest-only commits excluded)`);
+// Compare membership, not commit time: backfilled entries must be appended, never inserted.
+if (JSON.stringify(patches.map((p) => p.commit).sort()) !== JSON.stringify([...listed].sort())) {
+  fail(`manifest lists ${patches.length} commits, git has ${listed.length} Lygos commits (upstream and manifest-only commits excluded)`);
 }
 for (const p of patches) {
   const tag = (p.commit ?? "?").slice(0, 7);
@@ -63,12 +96,14 @@ versions.push({ at: "working copy", m });
 for (let i = 1; i < versions.length; i++) {
   const [prev, next] = [versions[i - 1], versions[i]];
   if (canonical(prev.m.upstream) !== canonical(next.m.upstream)) fail(`${next.at} changed the upstream block`);
-  const [a, b] = [prev.m.patches ?? [], next.m.patches ?? []];
-  if (b.length < a.length) fail(`${next.at} dropped entries (${a.length} to ${b.length})`);
-  a.forEach((entry, j) => {
-    if (canonical(entry) !== canonical(b[j])) fail(`${next.at} changed entry ${j} (${(entry.commit ?? "?").slice(0, 7)}): entries are append-only`);
-  });
+  for (const field of ["patches", "upstreamSyncs"]) {
+    const [a, b] = [prev.m[field] ?? [], next.m[field] ?? []];
+    if (b.length < a.length) fail(`${next.at} dropped ${field} entries (${a.length} to ${b.length})`);
+    a.forEach((entry, j) => {
+      if (canonical(entry) !== canonical(b[j])) fail(`${next.at} changed ${field} entry ${j} (${(entry.commit ?? "?").slice(0, 7)}): entries are append-only`);
+    });
+  }
 }
 
-console.log(`fork patches: ${patches.length} listed, ${commits.length - listed.length} manifest-only, ${versions.length - 1} manifest versions append-only, failures ${failures}`);
+console.log(`fork patches: ${patches.length} listed, ${upstreamCommits.size} upstream, ${manifestOnly.length} manifest-only, ${versions.length - 1} manifest versions append-only, failures ${failures}`);
 process.exit(failures === 0 ? 0 : 1);
