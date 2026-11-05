@@ -293,6 +293,18 @@
       "route": "stays ours",
       "forkPatchesFlagCorrect": null,
       "flagNote": "Not listed: commits that change only lygos/FORK-PATCHES.json are excluded by the manifest's own rule."
+    },
+    {
+      "commit": "7d9cfabe02c0480506273aacf8aac62f59ee0793",
+      "subject": "display-core: rustfmt the wallet-payment change scope test",
+      "class": "D",
+      "reason": "Format the new display policy matrix test with rustfmt; build bytes unchanged."
+    },
+    {
+      "commit": "2b8c4ec177d520f30b373d0a11b74ed345181d46",
+      "subject": "display-core: record 0.2.0 in the linked crate list",
+      "class": "D",
+      "reason": "Record the reviewed display-core 0.2.0 linked crate version."
     }
   ],
   "syncBranchCommits": [

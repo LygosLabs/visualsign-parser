@@ -312,6 +312,24 @@
         "src/chain_parsers/visualsign-bitcoin/src/scripts.rs"
       ],
       "reason": "Restrict address recognition to owned standard change outputs under wallet-payment, retain existing bare-script contracts, correct engine identity test and formatting, and record the full upgrade from shipped source."
+    },
+    {
+      "commit": "7d9cfabe02c0480506273aacf8aac62f59ee0793",
+      "subject": "display-core: rustfmt the wallet-payment change scope test",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/display-core/tests/display_test.rs"
+      ],
+      "reason": "Format the new display policy matrix test with rustfmt; build bytes unchanged."
+    },
+    {
+      "commit": "2b8c4ec177d520f30b373d0a11b74ed345181d46",
+      "subject": "display-core: record 0.2.0 in the linked crate list",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/display-core/LINKED-CRATES.txt"
+      ],
+      "reason": "Record the reviewed display-core 0.2.0 linked crate version."
     }
   ]
 }
