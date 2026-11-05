@@ -10,8 +10,9 @@
 //! - A spent (input) script is labelled only when the parser verified it
 //!   through a `non_witness_utxo` that hashes to the prevout txid. A script
 //!   claimed by `witness_utxo` alone is shown exactly as the parser shows it.
-//! - Only bare scripts (no address form) can be owned, so a label never
-//!   replaces or sits beside an address.
+//! - Vault labels require bare scripts. WalletPayment alone admits the exact
+//!   label `Your change` beside an address-form output, never on an input.
+//!   The full address is always displayed.
 //! - Labels are the wallet's own words, a closed pattern:
 //!   `^Your (new )?vault #[0-9]{1,4}$`, exactly, with no leading zeros. No two
 //!   owned scripts may carry the same vault number. Anything else refuses the
@@ -129,6 +130,8 @@ pub enum Policy {
     None,
     /// A withdrawal from a vault: see the crate documentation.
     VaultWithdrawal,
+    /// Wallet sends and fundings, with address-form change on outputs only.
+    WalletPayment,
 }
 
 /// Scripts the caller owns, each with its label.
@@ -148,16 +151,28 @@ struct OwnedEntry {
 impl OwnedScripts {
     /// From `[{"scriptHex": "...", "label": "..."}]`.
     pub fn from_json(json: &str) -> Result<Self, Refusal> {
+        Self::from_json_for_policy(json, Policy::None)
+    }
+
+    /// Parse labels under an explicit caller-held policy.
+    pub fn from_json_for_policy(json: &str, policy: Policy) -> Result<Self, Refusal> {
         if json.len() > MAX_OWNED_JSON_BYTES {
             return Err(Refusal::BadOwnedJson);
         }
         let entries: Vec<OwnedEntry> =
             serde_json::from_str(json).map_err(|_| Refusal::BadOwnedJson)?;
-        Self::new(entries.into_iter().map(|e| (e.script_hex, e.label)))
+        Self::new_for_policy(entries.into_iter().map(|e| (e.script_hex, e.label)), policy)
     }
 
     /// From `(script hex, label)` pairs.
     pub fn new<I>(entries: I) -> Result<Self, Refusal>
+    where
+        I: IntoIterator<Item = (String, String)>,
+    {
+        Self::new_for_policy(entries, Policy::None)
+    }
+
+    pub fn new_for_policy<I>(entries: I, policy: Policy) -> Result<Self, Refusal>
     where
         I: IntoIterator<Item = (String, String)>,
     {
@@ -171,29 +186,29 @@ impl OwnedScripts {
             if bytes.is_empty() || bytes.len() > MAX_SCRIPT_BYTES {
                 return Err(Refusal::BadScriptHex);
             }
-            if !is_valid_label(&label) {
+            let change = policy == Policy::WalletPayment && label == "Your change";
+            if !change && !is_valid_label(&label) {
                 return Err(Refusal::BadLabel);
             }
             let script = ScriptBuf::from_bytes(bytes);
-            if has_address_form(&script) {
+            if has_address_form(&script) && !change {
                 return Err(Refusal::OwnedScriptHasAddress);
+            }
+            if change && !has_address_form(&script) {
+                return Err(Refusal::BadLabel);
             }
             if out.iter().any(|(s, _)| *s == script) {
                 return Err(Refusal::DuplicateOwnedScript);
             }
             if out
                 .iter()
-                .any(|(_, l)| vault_number(l) == vault_number(&label))
+                .any(|(_, l)| vault_number(&label).is_some() && vault_number(l) == vault_number(&label))
             {
                 return Err(Refusal::DuplicateLabel);
             }
             out.push((script, label));
         }
         Ok(Self { entries: out })
-    }
-
-    fn scripts(&self) -> impl Iterator<Item = &Script> {
-        self.entries.iter().map(|(s, _)| s.as_script())
     }
 
     /// The label of the owned script whose bytes equal `script`.
@@ -236,6 +251,11 @@ struct OwnedRecognizer {
 
 impl ScriptRecognizer for OwnedRecognizer {
     fn recognize(&self, script_pubkey: &Script, source: ScriptSource) -> Option<RecognizedScript> {
+        if self.owned.label_for(script_pubkey) == Some("Your change")
+            && !matches!(source, ScriptSource::Output)
+        {
+            return None;
+        }
         match source {
             ScriptSource::Output | ScriptSource::VerifiedPrevout => self
                 .owned
@@ -258,7 +278,13 @@ pub fn display(
     policy: Policy,
 ) -> Result<SignablePayload, Refusal> {
     let wrapper = BitcoinTransactionWrapper::from_string(psbt).map_err(|_| Refusal::BadPsbt)?;
-    if policy == Policy::VaultWithdrawal {
+    // Recheck even an OwnedScripts value constructed under a different policy.
+    for (script, label) in &owned.entries {
+        if has_address_form(script) && (policy != Policy::WalletPayment || label != "Your change") {
+            return Err(Refusal::OwnedScriptHasAddress);
+        }
+    }
+    if matches!(policy, Policy::VaultWithdrawal | Policy::WalletPayment) {
         check_vault_withdrawal(wrapper.inner(), owned)?;
     }
     let recognizer: Arc<dyn ScriptRecognizer> = Arc::new(OwnedRecognizer {
@@ -294,8 +320,8 @@ fn check_vault_withdrawal(psbt: &Psbt, owned: &OwnedScripts) -> Result<(), Refus
         return Err(Refusal::Rejected);
     }
     if owned
-        .scripts()
-        .any(|s| s.is_op_return() || s.is_witness_program())
+        .entries.iter()
+        .any(|(s, label)| label != "Your change" && (s.is_op_return() || s.is_witness_program()))
     {
         return Err(Refusal::OwnedScriptNotVault);
     }

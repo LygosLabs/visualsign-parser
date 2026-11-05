@@ -380,6 +380,7 @@ fn policy_name(policy: Policy) -> &'static str {
     match policy {
         Policy::None => "none",
         Policy::VaultWithdrawal => "vault-withdrawal",
+        Policy::WalletPayment => "wallet-payment",
     }
 }
 
@@ -1140,4 +1141,20 @@ fn vault_withdrawal_refuses_a_duplicated_input_itself() {
         run(&psbt, owned_vault0(), Policy::None, Network::Regtest),
         "refused: psbt-rejected"
     );
+}
+
+#[test]
+fn wallet_change_is_policy_scoped_and_address_only() {
+    let one = format!("0014{}", "11".repeat(20));
+    let two = format!("0014{}", "22".repeat(20));
+    let entries = vec![(one.clone(), "Your change".to_string()), (two, "Your change".to_string())];
+    let owned = OwnedScripts::new_for_policy(entries, Policy::WalletPayment).unwrap();
+    assert_eq!(owned.label_for(&ScriptBuf::from_bytes(hex::decode(&one).unwrap())), Some("Your change"));
+    // A policy-specific value cannot be smuggled into the withdrawal or lax policy.
+    for policy in [Policy::None, Policy::VaultWithdrawal] {
+        assert_eq!(display(&psbt_hex(&real_helper_whole_vault()), Network::Regtest, &owned, policy).unwrap_err(), Refusal::OwnedScriptHasAddress);
+    }
+    assert_eq!(OwnedScripts::new_for_policy(vec![("51".to_string(), "Your change".to_string())], Policy::WalletPayment).unwrap_err(), Refusal::BadLabel);
+    assert_eq!(OwnedScripts::new_for_policy(vec![(one.clone(), "Your vault #1".to_string())], Policy::WalletPayment).unwrap_err(), Refusal::OwnedScriptHasAddress);
+    assert_eq!(OwnedScripts::new_for_policy(vec![(one.clone(), "Your change".to_string()), (one, "Your change".to_string())], Policy::WalletPayment).unwrap_err(), Refusal::DuplicateOwnedScript);
 }

@@ -25,7 +25,7 @@ function call(...args) {
   try { return glue.display(...args); } catch (e) { fail(`threw ${e} for ${JSON.stringify(args).slice(0, 80)}`); return ""; }
 }
 
-const ENGINE = "display-core/0.1.0";
+const ENGINE = "display-core/0.2.0";
 
 // The payload text exactly as embedded, the engine and the digest.
 function split(out) {

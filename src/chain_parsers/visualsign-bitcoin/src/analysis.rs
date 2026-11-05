@@ -174,8 +174,8 @@ pub fn analyze(
         check_money_range(output_total, "output total")?;
         let address = address(&out.script_pubkey, network);
         let mut details = scripts::output_scripts(meta, &out.script_pubkey);
-        // Bare: no address form, the same rule that shows the raw hex.
-        if address.is_none() {
+        // Output annotations retain the full address; input recognition stays bare-only.
+        {
             details.extend(scripts::recognize(
                 recognizers,
                 &out.script_pubkey,

@@ -72,6 +72,7 @@ fn parse_policy(name: &str) -> Option<Policy> {
     match name {
         "none" => Some(Policy::None),
         "vault-withdrawal" => Some(Policy::VaultWithdrawal),
+        "wallet-payment" => Some(Policy::WalletPayment),
         _ => None,
     }
 }
@@ -88,7 +89,7 @@ fn render(
         .filter(|p| p.starts_with(PSBT_BASE64_PREFIX))
         .ok_or("not-base64-psbt")?;
     let owned =
-        OwnedScripts::from_json(owned_json.ok_or("bad-owned-json")?).map_err(Refusal::code)?;
+        OwnedScripts::from_json_for_policy(owned_json.ok_or("bad-owned-json")?, policy).map_err(Refusal::code)?;
     let payload =
         visualsign_bitcoin_owned::display(psbt, network, &owned, policy).map_err(Refusal::code)?;
     let payload_json = payload.to_json().map_err(|_| "serialize-failed")?;

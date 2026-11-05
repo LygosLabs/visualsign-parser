@@ -47,3 +47,20 @@ string from the page. `mutinynet` and `signet` are refused; showing vault
 spends there needs a decision, not a fallback. The network argument is the
 caller's assertion (a PSBT does not name its network), which is why the
 payload's first field still says "transaction network unknown".
+
+## Wallet sends and fundings (0.2.0)
+
+Use the compiled policy `wallet-payment`, never a caller-selected policy and
+never retry a refusal under `none`. It applies the same verified-input,
+sighash, script and PSBT-field checks as `vault-withdrawal`.
+
+Only this policy admits address-form owned outputs with the exact label
+`Your change`. The address remains in full in the summary and Address row;
+the label is an additional Recognized Script row. It never labels an input.
+Multiple distinct change scripts may have this label. A bare script cannot
+use it. Vault labels still refuse any address-form script.
+
+The wallet must derive change membership itself, and supply only the funding's
+new vault (if any) with `Your new vault #N`; it must not take either from page
+input. Its independent reader checks every output, role, amount and fee before
+approval and signing. The engine has no keys and cannot prove ownership.
