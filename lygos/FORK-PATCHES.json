@@ -397,6 +397,20 @@
         "lygos/check-fork-patches.test.mjs"
       ],
       "reason": "Verify pinned upstream ancestry and append-only sync provenance, retain every Lygos patch, and exercise missing-entry and false-provenance refusals."
+    },
+    {
+      "commit": "afd452a3fb7aa30021a6164bb50c151b6cc84af6",
+      "subject": "Reject local ancestry overrides and shallow fork history",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/check-fork-patches.mjs",
+        "lygos/check-fork-patches.test.mjs"
+      ],
+      "reason": "Ignore replacement objects, refuse legacy grafts and shallow history, and exercise targeted ancestry laundering in clones and linked worktrees. Consumers must independently pin and verify the checker hash before execution.",
+      "checker": {
+        "path": "lygos/check-fork-patches.mjs",
+        "sha256": "480e09feb1820e5f1dc6df61eb34ca844d8d78d8f60ecc4671dd2df746137658"
+      }
     }
   ],
   "upstreamSyncs": [
