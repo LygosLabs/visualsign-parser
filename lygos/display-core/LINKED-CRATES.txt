@@ -19,7 +19,7 @@ chrono v0.4.42
 crypto-common v0.1.7
 diff v0.1.13
 digest v0.10.7
-display-core v0.1.0 (path lygos/display-core)
+display-core v0.2.0 (path lygos/display-core)
 either v1.15.0
 equivalent v1.0.2
 generated v0.1.0 (path src/generated)
