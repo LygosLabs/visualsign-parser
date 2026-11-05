@@ -12,13 +12,15 @@
 // upstreamCandidate or drop an entry. Changing the base means editing this
 // script, which is itself a listed, reviewed commit.
 // Usage: node lygos/check-fork-patches.mjs
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+const git = (...args) => execFileSync("git", ["-C", repo, ...args], {
+  encoding: "utf8", env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+}).trim();
 const MANIFEST = "lygos/FORK-PATCHES.json";
 const UPSTREAM_REPOSITORY = "https://github.com/anchorageoss/visualsign-parser";
 const UPSTREAM_BASE = "5d18e229d65d4015865ea71dbe22b85578bc4c74";
@@ -32,6 +34,13 @@ const UPSTREAM_PATHS = ["src/chain_parsers/visualsign-bitcoin/", "docs/chains/bi
 
 let failures = 0;
 const fail = (msg) => { failures++; console.log("FAIL", msg); };
+
+// History must be complete and unmodified by local ancestry overrides. Resolve
+// the common repository path through Git so linked worktrees are covered too.
+const grafts = path.resolve(repo, git("rev-parse", "--git-path", "info/grafts"));
+if (existsSync(grafts)) fail("local info/grafts exists; remove it before checking fork history");
+if (git("rev-parse", "--is-shallow-repository") !== "false") fail("shallow repository cannot verify fork history");
+if (failures) process.exit(1);
 
 const m = JSON.parse(readFileSync(path.join(repo, MANIFEST), "utf8"));
 if (m.version !== 1) fail("version must be 1");
