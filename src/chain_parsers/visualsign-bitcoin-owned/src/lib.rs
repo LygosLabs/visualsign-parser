@@ -194,16 +194,15 @@ impl OwnedScripts {
             if has_address_form(&script) && !change {
                 return Err(Refusal::OwnedScriptHasAddress);
             }
-            if change && !has_address_form(&script) {
+            if change && !is_address_type(&script) {
                 return Err(Refusal::BadLabel);
             }
             if out.iter().any(|(s, _)| *s == script) {
                 return Err(Refusal::DuplicateOwnedScript);
             }
-            if out
-                .iter()
-                .any(|(_, l)| vault_number(&label).is_some() && vault_number(l) == vault_number(&label))
-            {
+            if out.iter().any(|(_, l)| {
+                vault_number(&label).is_some() && vault_number(l) == vault_number(&label)
+            }) {
                 return Err(Refusal::DuplicateLabel);
             }
             out.push((script, label));
@@ -290,8 +289,18 @@ pub fn display(
     let recognizer: Arc<dyn ScriptRecognizer> = Arc::new(OwnedRecognizer {
         owned: owned.clone(),
     });
-    BitcoinVisualSignConverter::new(network)
-        .with_recognizers(vec![recognizer])
+    let mut converter = BitcoinVisualSignConverter::new(network).with_recognizers(vec![recognizer]);
+    if policy == Policy::WalletPayment {
+        converter = converter.with_wallet_payment_change_scripts(
+            owned
+                .entries
+                .iter()
+                .filter(|(script, label)| label == "Your change" && is_address_type(script))
+                .map(|(script, _)| script.clone())
+                .collect(),
+        );
+    }
+    converter
         .to_visual_sign_payload(wrapper, VisualSignOptions::default())
         .map(|r| r.payload)
         .map_err(|_| Refusal::Rejected)
@@ -320,7 +329,8 @@ fn check_vault_withdrawal(psbt: &Psbt, owned: &OwnedScripts) -> Result<(), Refus
         return Err(Refusal::Rejected);
     }
     if owned
-        .entries.iter()
+        .entries
+        .iter()
         .any(|(s, label)| label != "Your change" && (s.is_op_return() || s.is_witness_program()))
     {
         return Err(Refusal::OwnedScriptNotVault);

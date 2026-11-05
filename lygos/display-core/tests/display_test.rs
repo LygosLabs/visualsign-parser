@@ -295,10 +295,11 @@ fn a_different_engine_gives_a_different_digest() {
         "vault-withdrawal",
     );
     let (payload, engine, digest) = split(&out);
+    assert_eq!(engine, "display-core/0.2.0");
     assert_eq!(digest_hex(engine, payload), digest);
     for other in [
         "display-core/0.1.1",
-        "display-core/0.2.0",
+        "display-core/0.1.0",
         "other-engine/0.1.0",
         "",
     ] {
@@ -311,21 +312,33 @@ fn a_different_engine_gives_a_different_digest() {
 /// Wallet change is an annotation, never an alternative address or an input label.
 #[test]
 fn wallet_payment_preserves_addresses_and_checks_every_input() {
-    use bitcoin::{Amount, ScriptBuf};
     use bitcoin::psbt::Psbt;
+    use bitcoin::{Amount, ScriptBuf};
     let fixture = read(bitcoin_fixtures().join("synthetic-bare-script-input.input"));
     let mut p = Psbt::deserialize(&hex::decode(fixture.trim()).unwrap()).unwrap();
     let change = ScriptBuf::from_bytes(hex::decode(format!("0014{}", "11".repeat(20))).unwrap());
     // Use a synthetic fully verified address-form previous output.
     let mut previous = p.unsigned_tx.clone();
-    previous.output = vec![bitcoin::TxOut { value: Amount::from_sat(100_000), script_pubkey: change.clone() }];
+    previous.output = vec![bitcoin::TxOut {
+        value: Amount::from_sat(100_000),
+        script_pubkey: change.clone(),
+    }];
     p.unsigned_tx.input.truncate(1);
     p.inputs.truncate(1);
     p.unsigned_tx.input[0].previous_output = bitcoin::OutPoint::new(previous.compute_txid(), 0);
-    p.inputs[0] = bitcoin::psbt::Input { non_witness_utxo: Some(previous), ..Default::default() };
-    p.unsigned_tx.output = vec![bitcoin::TxOut { value: Amount::from_sat(90_000), script_pubkey: change.clone() }];
+    p.inputs[0] = bitcoin::psbt::Input {
+        non_witness_utxo: Some(previous),
+        ..Default::default()
+    };
+    p.unsigned_tx.output = vec![bitcoin::TxOut {
+        value: Amount::from_sat(90_000),
+        script_pubkey: change.clone(),
+    }];
     p.outputs = vec![Default::default()];
-    let owned = format!(r#"[{{"scriptHex":"{}","label":"Your change"}}]"#, hex::encode(change.as_bytes()));
+    let owned = format!(
+        r#"[{{"scriptHex":"{}","label":"Your change"}}]"#,
+        hex::encode(change.as_bytes())
+    );
     let encoded = b64.encode(p.serialize());
     let out = call(&encoded, "regtest", &owned, "wallet-payment");
     let (payload, engine, digest) = split(&out);
@@ -333,34 +346,160 @@ fn wallet_payment_preserves_addresses_and_checks_every_input() {
     assert_eq!(digest, engine_digest(engine, payload));
     let json: serde_json::Value = serde_json::from_str(payload).unwrap();
     let fields = json["Fields"].as_array().unwrap();
-    let input = fields.iter().find(|f| f["Label"] == "Input 0").unwrap().to_string();
+    let input = fields
+        .iter()
+        .find(|f| f["Label"] == "Input 0")
+        .unwrap()
+        .to_string();
     assert!(!input.contains("Your change"));
     let output = fields.iter().find(|f| f["Label"] == "Output 0").unwrap();
-    let address = bitcoin::Address::from_script(&change, bitcoin::Network::Regtest).unwrap().to_string();
-    assert_eq!(output["PreviewLayout"]["Subtitle"]["Text"], format!("{address} 0.00090000 BTC"));
+    let address = bitcoin::Address::from_script(&change, bitcoin::Network::Regtest)
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        output["PreviewLayout"]["Subtitle"]["Text"],
+        format!("{address} 0.00090000 BTC")
+    );
     assert_eq!(output["FallbackText"], format!("{address} 0.00090000 BTC"));
-    let rows = output["PreviewLayout"]["Expanded"]["Fields"].as_array().unwrap();
+    let rows = output["PreviewLayout"]["Expanded"]["Fields"]
+        .as_array()
+        .unwrap();
     assert_eq!(rows[0]["AddressV2"]["Address"], address);
     assert_eq!(rows[3]["TextV2"]["Text"], "Your change");
     assert_eq!(rows[4]["Label"], "Recognized By");
     for policy in ["none", "vault-withdrawal"] {
-        assert_eq!(call(&encoded, "regtest", &owned, policy), r#"{"refused":"bad-label"}"#);
+        assert_eq!(
+            call(&encoded, "regtest", &owned, policy),
+            r#"{"refused":"bad-label"}"#
+        );
     }
     let vault_label = owned.replace("Your change", "Your new vault #1");
-    assert_eq!(call(&encoded, "regtest", &vault_label, "wallet-payment"), r#"{"refused":"owned-script-has-address"}"#);
+    assert_eq!(
+        call(&encoded, "regtest", &vault_label, "wallet-payment"),
+        r#"{"refused":"owned-script-has-address"}"#
+    );
     let bad_label = owned.replace("Your change", "Your change ");
-    assert_eq!(call(&encoded, "regtest", &bad_label, "wallet-payment"), r#"{"refused":"bad-label"}"#);
+    assert_eq!(
+        call(&encoded, "regtest", &bad_label, "wallet-payment"),
+        r#"{"refused":"bad-label"}"#
+    );
     // A funding labels the bare new vault while retaining its drain address.
     let mut funding = p.clone();
     funding.unsigned_tx.output[0].value = Amount::from_sat(40_000);
-    funding.unsigned_tx.output.push(bitcoin::TxOut { value: Amount::from_sat(50_000), script_pubkey: ScriptBuf::from_bytes(vec![0x51]) });
+    funding.unsigned_tx.output.push(bitcoin::TxOut {
+        value: Amount::from_sat(50_000),
+        script_pubkey: ScriptBuf::from_bytes(vec![0x51]),
+    });
     funding.outputs.push(Default::default());
     let funding_owned = owned.replace("]", r#",{"scriptHex":"51","label":"Your new vault #1"}]"#);
-    let funding_out = call(&b64.encode(funding.serialize()), "regtest", &funding_owned, "wallet-payment");
+    let funding_out = call(
+        &b64.encode(funding.serialize()),
+        "regtest",
+        &funding_owned,
+        "wallet-payment",
+    );
     let (funding_payload, _, _) = split(&funding_out);
     assert!(funding_payload.contains("Your new vault #1 0.00050000 BTC"));
     assert!(funding_payload.contains(&format!("{address} 0.00040000 BTC")));
     assert!(funding_payload.contains("Your change"));
     p.inputs[0].non_witness_utxo = None;
-    assert_eq!(call(&b64.encode(p.serialize()), "regtest", &owned, "wallet-payment"), r#"{"refused":"unverified-input"}"#);
+    assert_eq!(
+        call(
+            &b64.encode(p.serialize()),
+            "regtest",
+            &owned,
+            "wallet-payment"
+        ),
+        r#"{"refused":"unverified-input"}"#
+    );
+}
+
+/// Only exact owned standard outputs gain the wallet-payment change annotation.
+#[test]
+fn wallet_payment_change_scope_matrix() {
+    use bitcoin::psbt::Psbt;
+    use bitcoin::{Address, Amount, OutPoint, ScriptBuf, TxOut};
+
+    let fixture = read(bitcoin_fixtures().join("synthetic-bare-script-input.input"));
+    let template = Psbt::deserialize(&hex::decode(fixture.trim()).unwrap()).unwrap();
+    let scripts = [
+        format!("76a914{}88ac", "11".repeat(20)),
+        format!("a914{}87", "11".repeat(20)),
+        format!("0014{}", "11".repeat(20)),
+        format!("0020{}", "11".repeat(32)),
+        format!("5120{}", "11".repeat(32)),
+    ];
+    for script_hex in scripts {
+        let script = ScriptBuf::from_bytes(hex::decode(&script_hex).unwrap());
+        let foreign =
+            ScriptBuf::from_bytes(hex::decode(format!("0014{}", "22".repeat(20))).unwrap());
+        let mut p = template.clone();
+        let mut previous = p.unsigned_tx.clone();
+        previous.output = vec![TxOut {
+            value: Amount::from_sat(100_000),
+            script_pubkey: script.clone(),
+        }];
+        p.unsigned_tx.input.truncate(1);
+        p.inputs.truncate(1);
+        p.unsigned_tx.input[0].previous_output = OutPoint::new(previous.compute_txid(), 0);
+        p.inputs[0] = bitcoin::psbt::Input {
+            non_witness_utxo: Some(previous),
+            ..Default::default()
+        };
+        p.unsigned_tx.output = vec![
+            TxOut {
+                value: Amount::from_sat(40_000),
+                script_pubkey: script.clone(),
+            },
+            TxOut {
+                value: Amount::from_sat(50_000),
+                script_pubkey: foreign,
+            },
+        ];
+        p.outputs = vec![Default::default(), Default::default()];
+        let encoded = b64.encode(p.serialize());
+        let owned = format!(r#"[{{"scriptHex":"{script_hex}","label":"Your change"}}]"#);
+        let address = Address::from_script(&script, bitcoin::Network::Regtest)
+            .unwrap()
+            .to_string();
+        for policy in ["none", "vault-withdrawal", "wallet-payment"] {
+            let out = call(&encoded, "regtest", "[]", policy);
+            let (payload, _, _) = split(&out);
+            assert!(!payload.contains("Your change"), "{policy}: {script_hex}");
+            assert!(payload.contains(&address));
+        }
+        let out = call(&encoded, "regtest", &owned, "wallet-payment");
+        let (payload, _, _) = split(&out);
+        let json: serde_json::Value = serde_json::from_str(payload).unwrap();
+        let fields = json["Fields"].as_array().unwrap();
+        for (label, annotated) in [("Input 0", false), ("Output 0", true), ("Output 1", false)] {
+            let field = fields.iter().find(|f| f["Label"] == label).unwrap();
+            assert_eq!(field.to_string().contains("Your change"), annotated);
+        }
+        let output = fields.iter().find(|f| f["Label"] == "Output 0").unwrap();
+        assert_eq!(output["FallbackText"], format!("{address} 0.00040000 BTC"));
+        for policy in ["none", "vault-withdrawal"] {
+            assert_eq!(
+                call(&encoded, "regtest", &owned, policy),
+                r#"{"refused":"bad-label"}"#
+            );
+        }
+        for label in ["Your vault #1", "Your new vault #1", "Your change ", "Change"] {
+            let invalid = owned.replace("Your change", label);
+            let expected = if label.contains("vault") {
+                r#"{"refused":"owned-script-has-address"}"#
+            } else {
+                r#"{"refused":"bad-label"}"#
+            };
+            assert_eq!(call(&encoded, "regtest", &invalid, "wallet-payment"), expected);
+        }
+        // Future witness addresses and bare scripts are not standard change types.
+        for invalid_script in ["51".to_string(), format!("5220{}", "33".repeat(32))] {
+            let invalid = owned.replace(&script_hex, &invalid_script);
+            assert_eq!(
+                call(&encoded, "regtest", &invalid, "wallet-payment"),
+                r#"{"refused":"bad-label"}"#
+            );
+        }
+    }
 }

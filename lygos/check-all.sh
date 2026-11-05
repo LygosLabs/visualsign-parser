@@ -17,7 +17,7 @@ work=${1:-$repo/lygos/display-core/target/check-all}
 # Pinned test counts per crate (all test targets and doc tests together).
 BITCOIN_TESTS=59
 OWNED_TESTS=29
-DISPLAY_CORE_TESTS=11
+DISPLAY_CORE_TESTS=12
 
 fail() {
   echo "FAIL: $*" >&2

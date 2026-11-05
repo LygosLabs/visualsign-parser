@@ -108,6 +108,7 @@ pub fn analyze(
     psbt: &Psbt,
     network: Network,
     recognizers: &[Arc<dyn ScriptRecognizer>],
+    wallet_payment_change_scripts: &[ScriptBuf],
 ) -> Result<Analysis, BitcoinParserError> {
     validate_psbt_version(psbt)?;
     let tx = &psbt.unsigned_tx;
@@ -174,8 +175,8 @@ pub fn analyze(
         check_money_range(output_total, "output total")?;
         let address = address(&out.script_pubkey, network);
         let mut details = scripts::output_scripts(meta, &out.script_pubkey);
-        // Output annotations retain the full address; input recognition stays bare-only.
-        {
+        // Only an explicit wallet-payment allow-list extends bare-script recognition.
+        if address.is_none() || wallet_payment_change_scripts.contains(&out.script_pubkey) {
             details.extend(scripts::recognize(
                 recognizers,
                 &out.script_pubkey,

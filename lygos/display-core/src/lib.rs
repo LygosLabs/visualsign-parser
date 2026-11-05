@@ -88,8 +88,8 @@ fn render(
     let psbt = psbt_base64
         .filter(|p| p.starts_with(PSBT_BASE64_PREFIX))
         .ok_or("not-base64-psbt")?;
-    let owned =
-        OwnedScripts::from_json_for_policy(owned_json.ok_or("bad-owned-json")?, policy).map_err(Refusal::code)?;
+    let owned = OwnedScripts::from_json_for_policy(owned_json.ok_or("bad-owned-json")?, policy)
+        .map_err(Refusal::code)?;
     let payload =
         visualsign_bitcoin_owned::display(psbt, network, &owned, policy).map_err(Refusal::code)?;
     let payload_json = payload.to_json().map_err(|_| "serialize-failed")?;

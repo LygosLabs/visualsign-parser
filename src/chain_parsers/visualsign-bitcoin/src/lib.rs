@@ -26,7 +26,7 @@ pub use scripts::{
 use analysis::{AmountSource, Analysis, Fee, InputInfo, OutputInfo};
 use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
 use bitcoin::psbt::Psbt;
-use bitcoin::{Amount, Network};
+use bitcoin::{Amount, Network, ScriptBuf};
 use std::sync::Arc;
 use visualsign::encodings::SupportedEncodings;
 use visualsign::field_builders::{
@@ -131,6 +131,7 @@ impl BitcoinTransactionWrapper {
 pub struct BitcoinVisualSignConverter {
     network: Network,
     recognizers: Arc<[Arc<dyn ScriptRecognizer>]>,
+    wallet_payment_change_scripts: Arc<[ScriptBuf]>,
 }
 
 impl BitcoinVisualSignConverter {
@@ -139,6 +140,7 @@ impl BitcoinVisualSignConverter {
         Self {
             network,
             recognizers: Arc::new([]),
+            wallet_payment_change_scripts: Arc::new([]),
         }
     }
 
@@ -147,6 +149,15 @@ impl BitcoinVisualSignConverter {
     #[must_use]
     pub fn with_recognizers(mut self, recognizers: Vec<Arc<dyn ScriptRecognizer>>) -> Self {
         self.recognizers = recognizers.into();
+        self
+    }
+
+    /// Opt in to address-output recognition for wallet-payment change only.
+    /// The caller must supply only owned standard scripts named `Your change`.
+    /// Addresses remain visible; inputs and unlisted outputs stay bare-only.
+    #[must_use]
+    pub fn with_wallet_payment_change_scripts(mut self, scripts: Vec<ScriptBuf>) -> Self {
+        self.wallet_payment_change_scripts = scripts.into();
         self
     }
 }
@@ -163,9 +174,13 @@ impl VisualSignConverter<BitcoinTransactionWrapper> for BitcoinVisualSignConvert
         transaction_wrapper: BitcoinTransactionWrapper,
         options: VisualSignOptions,
     ) -> Result<ConversionResult, VisualSignError> {
-        let analysis =
-            analysis::analyze(transaction_wrapper.inner(), self.network, &self.recognizers)
-                .map_err(|e| VisualSignError::ConversionError(e.to_string()))?;
+        let analysis = analysis::analyze(
+            transaction_wrapper.inner(),
+            self.network,
+            &self.recognizers,
+            &self.wallet_payment_change_scripts,
+        )
+        .map_err(|e| VisualSignError::ConversionError(e.to_string()))?;
         let payload = build_payload(&analysis, self.network, options)?;
         Ok(ConversionResult::new(payload))
     }

@@ -123,8 +123,10 @@ pub const RESERVED_LABEL_PREFIXES: &[&str] = &["Cosigner ", "Input ", "Output "]
 /// Names bare scripts: scripts with no address form, which the parser can
 /// only show as raw hex.
 ///
-/// Called for every output script, including address-form outputs, and every
-/// bare spent input script. An output annotation never replaces its address.
+/// By default, called only for output and spent input scripts without an address.
+/// Wallet-payment callers may explicitly allow owned change output scripts via
+/// [`crate::BitcoinVisualSignConverter::with_wallet_payment_change_scripts`].
+/// An output annotation never replaces its address.
 /// The first recognizer that returns `Some` wins. The raw script is shown
 /// either way, so a recognizer adds a name; it cannot hide bytes or replace an
 /// address. `Send + Sync`, so a converter holding recognizers can be
