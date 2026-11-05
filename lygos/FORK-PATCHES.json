@@ -330,6 +330,17 @@
         "lygos/display-core/LINKED-CRATES.txt"
       ],
       "reason": "Record the reviewed display-core 0.2.0 linked crate version."
+    },
+    {
+      "commit": "08980a0e5a3cd8d1a6c30470ac048cfbb4072797",
+      "subject": "Pin the reproducible 0.2.0 display build and record follow-ups",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/CHANGE-CLASSES.json",
+        "lygos/FORK-PATCHES.json",
+        "lygos/display-core/WASM-SHA256"
+      ],
+      "reason": "Record the reproduced 0.2.0 wasm hash and the formatting and linked-crate follow-ups."
     }
   ]
 }
