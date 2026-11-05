@@ -386,6 +386,17 @@
         "lygos/CHANGE-CLASSES.json"
       ],
       "reason": "Record the classification and review routes of all fork changes."
+    },
+    {
+      "commit": "ca4178b723c4ed83c5ddf4501227e244b5e5e45c",
+      "subject": "Verify upstream sync ancestry separately from fork patches",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/FORK-PATCHES.json",
+        "lygos/check-fork-patches.mjs",
+        "lygos/check-fork-patches.test.mjs"
+      ],
+      "reason": "Verify pinned upstream ancestry and append-only sync provenance, retain every Lygos patch, and exercise missing-entry and false-provenance refusals."
     }
   ],
   "upstreamSyncs": [
