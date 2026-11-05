@@ -484,14 +484,22 @@ fn wallet_payment_change_scope_matrix() {
                 r#"{"refused":"bad-label"}"#
             );
         }
-        for label in ["Your vault #1", "Your new vault #1", "Your change ", "Change"] {
+        for label in [
+            "Your vault #1",
+            "Your new vault #1",
+            "Your change ",
+            "Change",
+        ] {
             let invalid = owned.replace("Your change", label);
             let expected = if label.contains("vault") {
                 r#"{"refused":"owned-script-has-address"}"#
             } else {
                 r#"{"refused":"bad-label"}"#
             };
-            assert_eq!(call(&encoded, "regtest", &invalid, "wallet-payment"), expected);
+            assert_eq!(
+                call(&encoded, "regtest", &invalid, "wallet-payment"),
+                expected
+            );
         }
         // Future witness addresses and bare scripts are not standard change types.
         for invalid_script in ["51".to_string(), format!("5220{}", "33".repeat(32))] {
