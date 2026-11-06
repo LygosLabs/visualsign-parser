@@ -15,7 +15,10 @@ jobs=${CHECK_JOBS:-3}
 work=${1:-$repo/lygos/display-core/target/check-all}
 
 # Pinned test counts per crate (all test targets and doc tests together).
-BITCOIN_TESTS=59
+BITCOIN_TESTS=70
+# The one upstream test that needs a running bitcoind (tests/regtest.rs regtest_core_psbts_match_parser) is
+# ignored here and run by its own regtest lane; exactly that test may be ignored, no other.
+BITCOIN_IGNORED=regtest_core_psbts_match_parser
 OWNED_TESTS=29
 DISPLAY_CORE_TESTS=12
 
@@ -31,9 +34,9 @@ fi
 
 # cargo test with the exact number of tests pinned and none ignored or
 # filtered out.
-counted_test() { # label, expected count, cargo test args...
-  local label=$1 want=$2
-  shift 2
+counted_test() { # label, expected count, allowed ignored test name ("" for none), cargo test args...
+  local label=$1 want=$2 allowed_ignored=$3
+  shift 3
   local log
   log=$(mktemp)
   nice -n 19 cargo test --locked -j "$jobs" "$@" 2>&1 | tee "$log"
@@ -46,11 +49,18 @@ counted_test() { # label, expected count, cargo test args...
         if ($(i + 1) ~ /^filtered/) f += $i
       }
     } END { print p + 0, g + 0, f + 0 }' "$log")
+  grep -E '^test .* \.\.\. ignored' "$log" > "$log.ignored" || true
   rm -f "$log"
   echo "$label: $passed passed, $ignored ignored, $filtered filtered out (pinned $want)"
-  [ "$ignored" -eq 0 ] || fail "$label: $ignored ignored tests"
+  if [ -z "$allowed_ignored" ]; then
+    [ "$ignored" -eq 0 ] || fail "$label: $ignored ignored tests"
+  else
+    [ "$ignored" -eq 1 ] || fail "$label: $ignored ignored tests, only $allowed_ignored may be"
+    grep -qE "^test $allowed_ignored \.\.\. ignored" "$log.ignored" || fail "$label: the ignored test is not $allowed_ignored"
+  fi
   [ "$filtered" -eq 0 ] || fail "$label: $filtered tests filtered out"
   [ "$passed" -eq "$want" ] || fail "$label: $passed tests passed, pinned $want"
+  rm -f "$log.ignored"
 }
 
 step "fork patches: lygos/FORK-PATCHES.json matches git log"
@@ -58,12 +68,12 @@ node "$repo/lygos/check-fork-patches.mjs"
 
 cd "$repo/src"
 step "upstream workspace: visualsign-bitcoin tests"
-counted_test visualsign-bitcoin "$BITCOIN_TESTS" -p visualsign-bitcoin
+counted_test visualsign-bitcoin "$BITCOIN_TESTS" "$BITCOIN_IGNORED" -p visualsign-bitcoin
 step "upstream workspace: visualsign-bitcoin tests without default features"
-counted_test "visualsign-bitcoin (no default features)" "$BITCOIN_TESTS" \
+counted_test "visualsign-bitcoin (no default features)" "$BITCOIN_TESTS" "$BITCOIN_IGNORED" \
   -p visualsign-bitcoin --no-default-features
 step "upstream workspace: visualsign-bitcoin-owned tests"
-counted_test visualsign-bitcoin-owned "$OWNED_TESTS" -p visualsign-bitcoin-owned
+counted_test visualsign-bitcoin-owned "$OWNED_TESTS" "" -p visualsign-bitcoin-owned
 step "upstream workspace: clippy -D warnings"
 nice -n 19 cargo clippy --locked -j "$jobs" -p visualsign-bitcoin -p visualsign-bitcoin-owned \
   --all-targets -- -D warnings
@@ -74,7 +84,7 @@ cargo fmt --check -p visualsign-bitcoin -p visualsign-bitcoin-owned
 
 cd "$repo/lygos/display-core"
 step "display-core: tests"
-counted_test display-core "$DISPLAY_CORE_TESTS"
+counted_test display-core "$DISPLAY_CORE_TESTS" ""
 step "display-core: clippy -D warnings"
 nice -n 19 cargo clippy --locked -j "$jobs" --all-targets -- -D warnings
 step "display-core: fmt --check"
