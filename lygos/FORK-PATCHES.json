@@ -411,6 +411,15 @@
         "path": "lygos/check-fork-patches.mjs",
         "sha256": "480e09feb1820e5f1dc6df61eb34ca844d8d78d8f60ecc4671dd2df746137658"
       }
+    },
+    {
+      "commit": "718a1c1642b50f88bc40d75010769677d47af376",
+      "subject": "Pin the Bitcoin test count and the one bitcoind test check-all may skip",
+      "upstreamCandidate": false,
+      "files": [
+        "lygos/check-all.sh"
+      ],
+      "reason": "check-all.sh pinned 59 Bitcoin tests and refused any ignored test, so it could never pass after the upstream sync (70 tests plus the bitcoind-only regtest test). Pin 70 and allow exactly that one named ignored test; any other ignored test still fails."
     }
   ],
   "upstreamSyncs": [
